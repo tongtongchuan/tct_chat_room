@@ -3,26 +3,42 @@ from flask_socketio import SocketIO, emit, join_room
 import database as db
 import os
 import json
+import uuid
+from werkzeug.utils import secure_filename
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 
-DEBUG = False # get debug mode
+DEBUG = False  # set True for development
 
 if DEBUG:
-    socketio = SocketIO(app, cors_allowed_origins="*")
+    socketio = SocketIO(app, cors_allowed_origins='*')
 else:
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+    socketio = SocketIO(app, cors_allowed_origins='*', async_mode='gevent')
 
 # user_id -> set of sid
 online_users = {}
+
+# ── Upload config ───────────────────────────────────────────────────────────
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
+ALLOWED_IMAGE  = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'tiff', 'ico', 'avif'}
+ALLOWED_AUDIO  = {'webm', 'ogg', 'mp3', 'wav', 'm4a', 'aac', 'flac', 'opus'}
+ALLOWED_VIDEO  = {'mp4', 'mkv', 'mov', 'avi', 'webm', 'flv', 'm4v'}
+MAX_UPLOAD_MB  = 100   # single-file limit raised; quota enforced per-user
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 @app.before_request
 def before_req():
     db.init_db()
+    # Reject banned users on every request
+    if 'user_id' in session and request.path.startswith('/api/') and request.path != '/api/logout':
+        user = db.get_user_by_id(session['user_id'])
+        if not user or db.is_user_banned(session['user_id']):
+            session.clear()
+            return jsonify({'ok': False, 'msg': '账号已被封禁或已删除'}), 403
 
 
 # ---------- Pages ----------
@@ -53,6 +69,10 @@ def register():
     data = request.json
     username = data.get('username', '').strip()
     password = data.get('password', '')
+    # Check if registration is enabled
+    settings = db.get_system_settings()
+    if settings.get('registration_enabled', '1') == '0':
+        return jsonify({'ok': False, 'msg': '注册已关闭'})
     if not username or not password:
         return jsonify({'ok': False, 'msg': '用户名和密码不能为空'})
     if len(username) < 2 or len(username) > 20:
@@ -70,6 +90,8 @@ def api_login():
     password = data.get('password', '')
     user = db.verify_user(username, password)
     if user:
+        if user.get('is_banned'):
+            return jsonify({'ok': False, 'msg': '账号已被封禁，请联系管理员'})
         session['user_id'] = user['id']
         session['username'] = user['username']
         return jsonify({'ok': True, 'user': {'id': user['id'], 'username': user['username']}})
@@ -107,6 +129,14 @@ def create_private():
     if not other_id or other_id == session['user_id']:
         return jsonify({'ok': False, 'msg': '无效用户'})
     conv_id = db.create_private_conversation(session['user_id'], other_id)
+    return jsonify({'ok': True, 'conversation_id': conv_id})
+
+
+@app.route('/api/conversations/self', methods=['POST'])
+def create_self_chat():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    conv_id = db.create_self_conversation(session['user_id'])
     return jsonify({'ok': True, 'conversation_id': conv_id})
 
 
@@ -152,7 +182,276 @@ def search_users():
     return jsonify({'ok': True, 'users': users})
 
 
-# ---------- Socket.IO Events ----------
+# ---------- Profile & Settings API ----------
+
+@app.route('/api/profile')
+def get_profile():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    profile = db.get_profile(session['user_id'])
+    return jsonify({'ok': True, 'profile': profile})
+
+
+@app.route('/api/profile', methods=['PUT'])
+def update_profile():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    data = request.json or {}
+    avatar_emoji = data.get('avatar_emoji')
+    avatar_url   = data.get('avatar_url')    # set to '' to clear custom avatar
+    bio          = data.get('bio')
+    theme        = data.get('theme')
+    font_size    = data.get('font_size')
+    if theme and theme not in ('light', 'dark'):
+        return jsonify({'ok': False, 'msg': '无效的主题'})
+    if font_size and font_size not in ('small', 'medium', 'large'):
+        return jsonify({'ok': False, 'msg': '无效的字体大小'})
+    if bio is not None and len(bio) > 100:
+        return jsonify({'ok': False, 'msg': '个性签名最多100个字符'})
+    db.update_profile(session['user_id'], avatar_emoji=avatar_emoji, avatar_url=avatar_url,
+                      bio=bio, theme=theme, font_size=font_size)
+    return jsonify({'ok': True, 'msg': '设置已保存'})
+
+
+# ── File / Avatar upload ────────────────────────────────────────────────────
+
+def _allowed_ext(filename, allowed_set):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_set
+
+
+def _save_upload(file_storage, sub_dir):
+    """Save an uploaded file and return its public URL."""
+    folder = os.path.join(UPLOAD_FOLDER, sub_dir)
+    os.makedirs(folder, exist_ok=True)
+    ext = file_storage.filename.rsplit('.', 1)[-1].lower() if '.' in file_storage.filename else 'bin'
+    filename = f'{uuid.uuid4().hex}.{ext}'
+    file_storage.save(os.path.join(folder, filename))
+    return f'/static/uploads/{sub_dir}/{filename}'
+
+
+@app.route('/api/upload/avatar', methods=['POST'])
+def upload_avatar():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    f = request.files.get('file')
+    if not f:
+        return jsonify({'ok': False, 'msg': '未选择文件'})
+    if not _allowed_ext(f.filename, ALLOWED_IMAGE):
+        return jsonify({'ok': False, 'msg': '仅支持图片格式'})
+    f.seek(0, 2)
+    size_mb = f.tell() / (1024 * 1024)
+    f.seek(0)
+    if size_mb > 5:
+        return jsonify({'ok': False, 'msg': '头像图片不超过 5 MB'})
+    url = _save_upload(f, 'avatars')
+    db.update_profile(session['user_id'], avatar_url=url)
+    return jsonify({'ok': True, 'url': url})
+
+
+@app.route('/api/upload', methods=['POST'])
+def upload_file():
+    """Upload media/file for chat messages. Enforces per-user storage quota."""
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    f = request.files.get('file')
+    if not f:
+        return jsonify({'ok': False, 'msg': '未选择文件'})
+    f.seek(0, 2)
+    file_size = f.tell()
+    f.seek(0)
+    size_mb = file_size / (1024 * 1024)
+    if size_mb > MAX_UPLOAD_MB:
+        return jsonify({'ok': False, 'msg': f'单文件不超过 {MAX_UPLOAD_MB} MB'})
+
+    ext = f.filename.rsplit('.', 1)[-1].lower() if '.' in f.filename else ''
+    if ext in ALLOWED_IMAGE:
+        msg_type, sub = 'image', 'images'
+    elif ext in ALLOWED_AUDIO:
+        msg_type, sub = 'audio', 'audio'
+    elif ext in ALLOWED_VIDEO:
+        msg_type, sub = 'video', 'video'
+    else:
+        msg_type, sub = 'file', 'files'
+
+    url = _save_upload(f, sub)
+    # Atomic quota check + record
+    if not db.record_file_upload(session['user_id'], url, file_size):
+        # Quota exceeded — remove the saved file
+        saved_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), url.lstrip('/'))
+        if os.path.exists(saved_path):
+            os.remove(saved_path)
+        return jsonify({'ok': False, 'msg': '云盘空间不足'})
+    return jsonify({'ok': True, 'url': url, 'msg_type': msg_type,
+                    'filename': secure_filename(f.filename) or f'file.{ext}'})
+
+
+@app.route('/api/settings/password', methods=['POST'])
+def change_password():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    data = request.json or {}
+    old_password = data.get('old_password', '')
+    new_password = data.get('new_password', '')
+    if not old_password or not new_password:
+        return jsonify({'ok': False, 'msg': '请填写完整'})
+    if len(new_password) < 4:
+        return jsonify({'ok': False, 'msg': '新密码至少4个字符'})
+    ok, msg = db.change_password(session['user_id'], old_password, new_password)
+    if ok:
+        session.clear()
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/storage/usage')
+def storage_usage():
+    """Return the current user's cloud storage usage and quota."""
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    info = db.get_user_storage_info(session['user_id'])
+    return jsonify({'ok': True, **info})
+
+
+# ---------- Contacts / Friends API ----------
+
+@app.route('/api/contacts')
+def get_contacts():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    friends = db.get_friends(session['user_id'])
+    pending_count = db.get_pending_request_count(session['user_id'])
+    return jsonify({'ok': True, 'friends': friends, 'pending_count': pending_count})
+
+
+@app.route('/api/contacts/requests')
+def get_friend_requests():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    requests = db.get_friend_requests(session['user_id'])
+    return jsonify({'ok': True, 'requests': requests})
+
+
+@app.route('/api/contacts/request', methods=['POST'])
+def send_friend_request():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    settings = db.get_system_settings()
+    if settings.get('allow_friend_requests', '1') == '0':
+        return jsonify({'ok': False, 'msg': '好友功能已关闭'})
+    target_id = request.json.get('user_id')
+    if not target_id or target_id == session['user_id']:
+        return jsonify({'ok': False, 'msg': '无效用户'})
+    ok, msg = db.send_friend_request(session['user_id'], target_id)
+    if ok:
+        # Notify target user via Socket.IO
+        if target_id in online_users:
+            for sid in online_users[target_id]:
+                socketio.emit('friend_request', {
+                    'from_id': session['user_id'],
+                    'from_name': session['username']
+                }, room=sid)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/contacts/requests/<int:request_id>/accept', methods=['POST'])
+def accept_friend_request(request_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.accept_friend_request(request_id, session['user_id'])
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/contacts/requests/<int:request_id>/reject', methods=['POST'])
+def reject_friend_request(request_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.reject_friend_request(request_id, session['user_id'])
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/contacts/<int:friend_id>', methods=['DELETE'])
+def remove_friend(friend_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.remove_friend(session['user_id'], friend_id)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+# ---------- Group Settings API ----------
+
+@app.route('/api/conversations/<int:conv_id>/settings')
+def get_group_settings(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    if not db.is_member(conv_id, session['user_id']):
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    settings = db.get_group_settings(conv_id, session['user_id'])
+    if not settings:
+        return jsonify({'ok': False, 'msg': '群聊不存在'}), 404
+    return jsonify({'ok': True, 'settings': settings})
+
+
+@app.route('/api/conversations/<int:conv_id>/name', methods=['PUT'])
+def update_group_name(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    new_name = (request.json or {}).get('name', '').strip()
+    if not new_name:
+        return jsonify({'ok': False, 'msg': '群名不能为空'})
+    ok, msg = db.update_group_name(conv_id, session['user_id'], new_name)
+    if ok:
+        socketio.emit('group_updated', {'conversation_id': conv_id, 'name': new_name},
+                      room=f'conv_{conv_id}')
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/members', methods=['POST'])
+def add_group_member(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    new_member_id = (request.json or {}).get('user_id')
+    if not new_member_id:
+        return jsonify({'ok': False, 'msg': '无效用户'})
+    ok, msg = db.add_group_member(conv_id, session['user_id'], new_member_id)
+    if ok and new_member_id in online_users:
+        for sid in online_users[new_member_id]:
+            socketio.emit('conversation_created', {'conversation_id': conv_id}, room=sid)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/members/<int:member_id>', methods=['DELETE'])
+def remove_group_member(conv_id, member_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.remove_group_member(conv_id, session['user_id'], member_id)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/members/<int:member_id>/role', methods=['PUT'])
+def set_member_role(conv_id, member_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    role = (request.json or {}).get('role', '')
+    ok, msg = db.set_member_role(conv_id, session['user_id'], member_id, role)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/leave', methods=['POST'])
+def leave_group(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.leave_group(conv_id, session['user_id'])
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/transfer', methods=['POST'])
+def transfer_group_owner(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    new_owner_id = (request.json or {}).get('user_id')
+    if not new_owner_id:
+        return jsonify({'ok': False, 'msg': '无效用户'})
+    ok, msg = db.transfer_group_owner(conv_id, session['user_id'], new_owner_id)
+    return jsonify({'ok': ok, 'msg': msg})
 
 @socketio.on('connect')
 def on_connect():
@@ -190,14 +489,34 @@ def on_send(data):
     uid = session.get('user_id')
     if not uid:
         return
-    conv_id = data.get('conversation_id')
-    content = data.get('content', '').strip()
-    if not conv_id or not content:
+    if db.is_user_banned(uid):
+        return
+    conv_id  = data.get('conversation_id')
+    content  = data.get('content', '').strip()
+    msg_type = data.get('msg_type', 'text')   # 'text'|'image'|'audio'|'file'
+    media_url = data.get('media_url')
+    filename  = data.get('filename', '')
+
+    # Validate media_url belongs to this user
+    if media_url and not db.verify_file_owner(uid, media_url):
+        return
+
+    # For media messages content may be empty – use filename as fallback display text
+    if msg_type != 'text' and not content:
+        content = filename or msg_type
+    if not conv_id or (not content and msg_type == 'text'):
         return
     if not db.is_member(conv_id, uid):
         return
-    msg = db.save_message(conv_id, uid, content)
+    if msg_type == 'text':
+        settings = db.get_system_settings()
+        max_len = int(settings.get('max_message_length', '2000'))
+        if len(content) > max_len:
+            return
+    msg = db.save_message(conv_id, uid, content, msg_type=msg_type, media_url=media_url)
     msg['sender_name'] = session.get('username')
+    if filename:
+        msg['filename'] = filename
     emit('new_message', msg, room=f'conv_{conv_id}')
 
 
@@ -259,7 +578,48 @@ def admin_logout():
 @require_admin
 def admin_get_users():
     users = db.get_all_users()
+    # Attach global quota to users who haven't overridden it
+    settings = db.get_system_settings()
+    default_quota_mb = int(settings.get('default_storage_quota_mb', '10240'))
+    for u in users:
+        if u['storage_quota_mb'] is None:
+            u['storage_quota_mb'] = default_quota_mb
+            u['quota_is_default'] = True
+        else:
+            u['quota_is_default'] = False
     return jsonify({'ok': True, 'users': users})
+
+
+@app.route('/api/admin/users', methods=['POST'])
+@require_admin
+def admin_create_user():
+    data = request.json or {}
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    if not username or not password:
+        return jsonify({'ok': False, 'msg': '用户名和密码不能为空'})
+    if len(username) < 2 or len(username) > 20:
+        return jsonify({'ok': False, 'msg': '用户名长度应2-20个字符'})
+    if len(password) < 4:
+        return jsonify({'ok': False, 'msg': '密码至少4个字符'})
+    ok, msg = db.create_user(username, password)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/admin/users/<int:user_id>/quota', methods=['PUT'])
+@require_admin
+def admin_set_user_quota(user_id):
+    data = request.json or {}
+    quota_mb = data.get('quota_mb')
+    if quota_mb is not None:
+        try:
+            quota_mb = int(quota_mb)
+            if quota_mb < 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            return jsonify({'ok': False, 'msg': '无效的配额值'})
+    db.set_user_quota(user_id, quota_mb)
+    return jsonify({'ok': True, 'msg': '用户配额已更新'})
 
 
 @app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
@@ -270,6 +630,18 @@ def admin_delete_user(user_id):
         return jsonify({'ok': False, 'msg': '用户不存在'})
     db.delete_user(user_id)
     return jsonify({'ok': True, 'msg': f'用户 {user["username"]} 已删除'})
+
+
+@app.route('/api/admin/users/<int:user_id>/ban', methods=['PUT'])
+@require_admin
+def admin_ban_user(user_id):
+    user = db.get_user_by_id(user_id)
+    if not user:
+        return jsonify({'ok': False, 'msg': '用户不存在'})
+    ban = (request.json or {}).get('ban', True)
+    db.ban_user(user_id, ban)
+    action = '封禁' if ban else '解封'
+    return jsonify({'ok': True, 'msg': f'用户 {user["username"]} 已{action}'})
 
 
 @app.route('/api/admin/groups')
@@ -294,6 +666,32 @@ def admin_rename_group(conv_id):
 def admin_delete_group(conv_id):
     db.delete_group(conv_id)
     return jsonify({'ok': True, 'msg': '群聊已删除'})
+
+
+@app.route('/api/admin/stats')
+@require_admin
+def admin_get_stats():
+    stats = db.get_admin_stats()
+    return jsonify({'ok': True, 'stats': stats})
+
+
+@app.route('/api/admin/system-settings')
+@require_admin
+def admin_get_system_settings():
+    settings = db.get_system_settings()
+    return jsonify({'ok': True, 'settings': settings})
+
+
+@app.route('/api/admin/system-settings', methods=['PUT'])
+@require_admin
+def admin_update_system_settings():
+    data = request.json or {}
+    allowed_keys = ('registration_enabled', 'max_message_length', 'system_name',
+                    'allow_friend_requests', 'default_storage_quota_mb')
+    for key in allowed_keys:
+        if key in data:
+            db.update_system_setting(key, str(data[key]))
+    return jsonify({'ok': True, 'msg': '系统设置已更新'})
 
 
 if __name__ == '__main__':

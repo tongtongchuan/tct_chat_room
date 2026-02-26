@@ -275,6 +275,48 @@
             from { opacity: 0; transform: translateX(20px); }
             to { opacity: 1; transform: translateX(0); }
         }
+
+        /* Stats grid */
+        .stat-card {
+            background: #F8FAFC;
+            border: 1px solid #E4E8ED;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+        .stat-num {
+            font-size: 32px;
+            font-weight: 700;
+            color: #2563EB;
+            margin-bottom: 4px;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #64748B;
+            font-weight: 500;
+        }
+        /* Ban badge */
+        .banned-badge {
+            display: inline-block;
+            padding: 1px 7px;
+            background: #FEF2F2;
+            color: #DC2626;
+            border: 1px solid #FECACA;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        /* Settings form */
+        .settings-row {
+            margin-bottom: 16px;
+        }
+        .settings-field-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #4A5568;
+            margin-bottom: 6px;
+        }
     </style>
 </head>
 <body>
@@ -288,15 +330,34 @@
 
     <div class="container">
         <div class="tabs">
-            <button class="active" onclick="switchTab('users')">用户管理</button>
-            <button onclick="switchTab('groups')">群聊管理</button>
+            <button class="active" onclick="switchTab('stats')">📊 概览</button>
+            <button onclick="switchTab('users')">👤 用户管理</button>
+            <button onclick="switchTab('groups')">👥 群聊管理</button>
+            <button onclick="switchTab('settings')">⚙️ 系统设置</button>
+        </div>
+
+        <!-- Stats Panel -->
+        <div class="panel active" id="panel-stats">
+            <div class="panel-header">
+                <h2>系统概览</h2>
+                <button class="btn-sm btn-edit" onclick="loadStats()">刷新</button>
+            </div>
+            <div id="statsGrid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:20px">
+                <div class="stat-card"><div class="stat-num" id="stat-users">-</div><div class="stat-label">注册用户</div></div>
+                <div class="stat-card"><div class="stat-num" id="stat-groups">-</div><div class="stat-label">群聊数量</div></div>
+                <div class="stat-card"><div class="stat-num" id="stat-msgs">-</div><div class="stat-label">消息总数</div></div>
+                <div class="stat-card"><div class="stat-num" id="stat-active">-</div><div class="stat-label">24h活跃用户</div></div>
+            </div>
         </div>
 
         <!-- Users Panel -->
-        <div class="panel active" id="panel-users">
+        <div class="panel" id="panel-users">
             <div class="panel-header">
                 <h2>用户列表</h2>
-                <span class="count" id="userCount">0 个用户</span>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <span class="count" id="userCount">0 个用户</span>
+                    <button class="btn-sm btn-edit" onclick="openCreateUserModal()">➕ 新建用户</button>
+                </div>
             </div>
             <table>
                 <thead>
@@ -304,11 +365,13 @@
                         <th>ID</th>
                         <th>用户</th>
                         <th>注册时间</th>
+                        <th>状态</th>
+                        <th>云盘用量 / 配额</th>
                         <th>操作</th>
                     </tr>
                 </thead>
                 <tbody id="userTableBody">
-                    <tr class="empty-row"><td colspan="4">加载中...</td></tr>
+                    <tr class="empty-row"><td colspan="6">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -334,6 +397,47 @@
                 </tbody>
             </table>
         </div>
+
+        <!-- System Settings Panel -->
+        <div class="panel" id="panel-settings">
+            <div class="panel-header">
+                <h2>系统设置</h2>
+            </div>
+            <div style="padding:20px; max-width:500px">
+                <div class="settings-row">
+                    <label class="settings-field-label">系统名称</label>
+                    <input type="text" id="sysName" class="modal input" style="margin-bottom:0;width:100%">
+                </div>
+                <div class="settings-row">
+                    <label class="settings-field-label">允许注册</label>
+                    <select id="sysRegEnabled" style="width:100%;padding:9px 12px;border:1.5px solid #E4E8ED;border-radius:8px;font-size:14px;background:#F8FAFB;color:#1E2A38">
+                        <option value="1">开启</option>
+                        <option value="0">关闭（禁止新用户注册）</option>
+                    </select>
+                </div>
+                <div class="settings-row">
+                    <label class="settings-field-label">允许好友功能</label>
+                    <select id="sysFriendReq" style="width:100%;padding:9px 12px;border:1.5px solid #E4E8ED;border-radius:8px;font-size:14px;background:#F8FAFB;color:#1E2A38">
+                        <option value="1">开启</option>
+                        <option value="0">关闭</option>
+                    </select>
+                </div>
+                <div class="settings-row">
+                    <label class="settings-field-label">消息最大长度</label>
+                    <input type="number" id="sysMaxMsg" min="50" max="10000"
+                           style="width:100%;padding:9px 12px;border:1.5px solid #E4E8ED;border-radius:8px;font-size:14px;background:#F8FAFB;color:#1E2A38">
+                </div>
+                <div class="settings-row">
+                    <label class="settings-field-label">默认云盘配额 (MB)</label>
+                    <input type="number" id="sysStorageQuota" min="100" max="1048576"
+                           style="width:100%;padding:9px 12px;border:1.5px solid #E4E8ED;border-radius:8px;font-size:14px;background:#F8FAFB;color:#1E2A38"
+                           placeholder="10240 = 10 GB">
+                    <div style="font-size:11px;color:#94A3B8;margin-top:4px">1 GB = 1024 MB。默认 10240 MB（10 GB）。可对单个用户单独设置。</div>
+                </div>
+                <button class="btn-sm btn-edit" style="padding:9px 24px;font-size:14px;margin-top:8px"
+                        onclick="saveSystemSettings()">保存设置</button>
+            </div>
+        </div>
     </div>
 
     <!-- Rename Modal -->
@@ -348,16 +452,57 @@
         </div>
     </div>
 
+    <!-- Create User Modal -->
+    <div class="modal-overlay" id="createUserModal">
+        <div class="modal">
+            <h3>新建用户</h3>
+            <input type="text" id="newUsername" placeholder="用户名（2-20字符）">
+            <input type="password" id="newUserPassword" placeholder="密码（至卖4个字符）">
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeCreateUserModal()">取消</button>
+                <button class="btn-confirm" onclick="confirmCreateUser()">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Set Quota Modal -->
+    <div class="modal-overlay" id="quotaModal">
+        <div class="modal">
+            <h3>设置用户配额</h3>
+            <p id="quotaModalDesc" style="font-size:13px;color:#64748B;margin-bottom:12px"></p>
+            <input type="number" id="quotaInput" placeholder="配额 MB，空白则恢复默认" min="0">
+            <div style="font-size:11px;color:#94A3B8;margin-top:-8px;margin-bottom:12px">1 GB = 1024 MB。留空恢复全局默认配额。</div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeQuotaModal()">取消</button>
+                <button class="btn-confirm" onclick="confirmSetQuota()">保存</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let renameTargetId = null;
+        let quotaTargetId = null;
+        let quotaDefaultMb = 10240;
+
+        // ===== Helpers =====
+        function fmtStorage(mb) {
+            return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`;
+        }
+        function fmtStorageBytes(bytes) {
+            const mb = bytes / (1024 * 1024);
+            return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
+        }
 
         // Tab switching
         function switchTab(tab) {
+            const tabs = ['stats', 'users', 'groups', 'settings'];
             document.querySelectorAll('.tabs button').forEach((b, i) => {
-                b.classList.toggle('active', (tab === 'users' && i === 0) || (tab === 'groups' && i === 1));
+                b.classList.toggle('active', tabs[i] === tab);
             });
-            document.getElementById('panel-users').classList.toggle('active', tab === 'users');
-            document.getElementById('panel-groups').classList.toggle('active', tab === 'groups');
+            tabs.forEach(t => {
+                document.getElementById(`panel-${t}`).classList.toggle('active', t === tab);
+            });
+            if (tab === 'settings') loadSystemSettings();
         }
 
         // Toast
@@ -380,6 +525,18 @@
             return d.innerHTML;
         }
 
+        // ===== Stats =====
+        async function loadStats() {
+            const res = await fetch('/api/admin/stats');
+            const data = await res.json();
+            if (!data.ok) { window.location.href = '/admin/login'; return; }
+            const s = data.stats;
+            document.getElementById('stat-users').textContent = s.user_count;
+            document.getElementById('stat-groups').textContent = s.group_count;
+            document.getElementById('stat-msgs').textContent = s.message_count;
+            document.getElementById('stat-active').textContent = s.active_users_24h;
+        }
+
         // ===== Users =====
         async function loadUsers() {
             const res = await fetch('/api/admin/users');
@@ -388,26 +545,58 @@
             const tbody = document.getElementById('userTableBody');
             document.getElementById('userCount').textContent = `${data.users.length} 个用户`;
             if (!data.users.length) {
-                tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无用户</td></tr>';
+                tbody.innerHTML = '<tr class="empty-row"><td colspan="6">暂无用户</td></tr>';
                 return;
             }
-            tbody.innerHTML = data.users.map(u => `
+            tbody.innerHTML = data.users.map(u => {
+                const usedMb = u.storage_used_bytes / (1024 * 1024);
+                const quotaMb = u.storage_quota_mb || quotaDefaultMb;
+                const pct = Math.min(usedMb / quotaMb * 100, 100);
+                const barColor = pct > 90 ? '#EF4444' : pct > 70 ? '#F59E0B' : '#2563EB';
+                const storageLabel = `<div style="min-width:140px">
+                    <div style="font-size:12px;margin-bottom:3px;color:#334155">${fmtStorageBytes(u.storage_used_bytes)} / ${fmtStorage(quotaMb)}</div>
+                    <div style="height:5px;background:#F1F5F9;border-radius:3px;overflow:hidden">
+                        <div style="height:100%;width:${pct.toFixed(1)}%;background:${barColor};border-radius:3px"></div>
+                    </div>
+                </div>`;
+                return `
                 <tr>
                     <td><code>${u.id}</code></td>
                     <td>
                         <div class="user-cell">
                             <div class="mini-avatar">${escapeHtml(u.username[0].toUpperCase())}</div>
                             <span>${escapeHtml(u.username)}</span>
+                            ${u.quota_is_default ? '' : '<span style="font-size:10px;margin-left:4px;padding:1px 5px;background:#EEF2FF;color:#6366F1;border-radius:3px">自定义</span>'}
                         </div>
                     </td>
                     <td>${fmtTime(u.created_at)}</td>
+                    <td>${u.is_banned ? '<span class="banned-badge">已封禁</span>' : '<span style="color:#16A34A;font-size:12px">正常</span>'}</td>
+                    <td>${storageLabel}</td>
                     <td>
                         <div class="actions">
+                            ${u.is_banned
+                                ? `<button class="btn-sm btn-edit" onclick="banUser(${u.id}, false)">解封</button>`
+                                : `<button class="btn-sm btn-danger" style="background:#FFF7ED;color:#C2410C;border-color:#FDBA74" onclick="banUser(${u.id}, true)">封禁</button>`
+                            }
+                            <button class="btn-sm btn-edit" onclick="openQuotaModal(${u.id}, '${escapeHtml(u.username)}', ${u.quota_is_default ? 'null' : u.storage_quota_mb})">配额</button>
                             <button class="btn-sm btn-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')">删除</button>
                         </div>
                     </td>
-                </tr>
-            `).join('');
+                </tr>`;
+            }).join('');
+        }
+
+        async function banUser(id, ban) {
+            const action = ban ? '封禁' : '解封';
+            if (!confirm(`确定${action}该用户？`)) return;
+            const res = await fetch(`/api/admin/users/${id}/ban`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ban })
+            });
+            const data = await res.json();
+            showToast(data.msg, data.ok ? 'success' : 'error');
+            if (data.ok) loadUsers();
         }
 
         async function deleteUser(id, name) {
@@ -489,6 +678,91 @@
             if (data.ok) loadGroups();
         }
 
+        // ===== System Settings =====
+        async function loadSystemSettings() {
+            const res = await fetch('/api/admin/system-settings');
+            const data = await res.json();
+            if (!data.ok) return;
+            const s = data.settings;
+            document.getElementById('sysName').value = s.system_name || '';
+            document.getElementById('sysRegEnabled').value = s.registration_enabled || '1';
+            document.getElementById('sysFriendReq').value = s.allow_friend_requests || '1';
+            document.getElementById('sysMaxMsg').value = s.max_message_length || '2000';
+            const qmb = parseInt(s.default_storage_quota_mb || '10240');
+            document.getElementById('sysStorageQuota').value = qmb;
+            quotaDefaultMb = qmb;
+        }
+
+        async function saveSystemSettings() {
+            const settings = {
+                system_name: document.getElementById('sysName').value.trim() || '聊天室',
+                registration_enabled: document.getElementById('sysRegEnabled').value,
+                allow_friend_requests: document.getElementById('sysFriendReq').value,
+                max_message_length: document.getElementById('sysMaxMsg').value,
+                default_storage_quota_mb: document.getElementById('sysStorageQuota').value,
+            };
+            const res = await fetch('/api/admin/system-settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+            const data = await res.json();
+            showToast(data.msg, data.ok ? 'success' : 'error');
+            if (data.ok) quotaDefaultMb = parseInt(settings.default_storage_quota_mb) || 10240;
+        }
+
+        // ===== Create User =====
+        function openCreateUserModal() {
+            document.getElementById('newUsername').value = '';
+            document.getElementById('newUserPassword').value = '';
+            document.getElementById('createUserModal').classList.add('show');
+            setTimeout(() => document.getElementById('newUsername').focus(), 50);
+        }
+        function closeCreateUserModal() {
+            document.getElementById('createUserModal').classList.remove('show');
+        }
+        async function confirmCreateUser() {
+            const username = document.getElementById('newUsername').value.trim();
+            const password = document.getElementById('newUserPassword').value;
+            if (!username || !password) { showToast('请填写完整', 'error'); return; }
+            const res = await fetch('/api/admin/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await res.json();
+            showToast(data.msg, data.ok ? 'success' : 'error');
+            if (data.ok) { closeCreateUserModal(); loadUsers(); }
+        }
+
+        // ===== Storage Quota =====
+        function openQuotaModal(userId, username, currentQuotaMb) {
+            quotaTargetId = userId;
+            document.getElementById('quotaModalDesc').textContent =
+                `用户：${username}。当前配额: ${
+                    currentQuotaMb ? fmtStorage(currentQuotaMb) : '全局默认 ' + fmtStorage(quotaDefaultMb)
+                }`;
+            document.getElementById('quotaInput').value = currentQuotaMb || '';
+            document.getElementById('quotaModal').classList.add('show');
+            setTimeout(() => document.getElementById('quotaInput').focus(), 50);
+        }
+        function closeQuotaModal() {
+            document.getElementById('quotaModal').classList.remove('show');
+            quotaTargetId = null;
+        }
+        async function confirmSetQuota() {
+            const raw = document.getElementById('quotaInput').value.trim();
+            const quota_mb = raw === '' ? null : parseInt(raw);
+            const res = await fetch(`/api/admin/users/${quotaTargetId}/quota`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quota_mb })
+            });
+            const data = await res.json();
+            showToast(data.msg, data.ok ? 'success' : 'error');
+            if (data.ok) { closeQuotaModal(); loadUsers(); }
+        }
+
         // ===== Logout =====
         async function adminLogout() {
             await fetch('/api/admin/logout', { method: 'POST' });
@@ -496,6 +770,7 @@
         }
 
         // ===== Init =====
+        loadStats();
         loadUsers();
         loadGroups();
     </script>
