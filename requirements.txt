@@ -1,0 +1,5 @@
+flask
+flask-socketio
+argon2-cffi
+gevent
+gevent-websocket

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>聊天室</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Toast notifications -->
+    <div id="toastContainer"></div>
+
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="user-info">
+                    <span class="avatar" id="myAvatar"></span>
+                    <span class="username" id="myName"></span>
+                </div>
+                <div class="header-actions">
+                    <button class="icon-btn" title="消息通知" id="toggleNotif" onclick="toggleNotifications()">🔔</button>
+                    <button class="icon-btn" title="退出" onclick="doLogout()">🚪</button>
+                </div>
+            </div>
+            <div class="sidebar-actions">
+                <button class="action-btn" onclick="showModal('newChat')">💬 新对话</button>
+                <button class="action-btn" onclick="showModal('newGroup')">👥 创建群聊</button>
+            </div>
+            <div class="conv-list" id="convList">
+                <div class="empty-hint">暂无会话，点击上方开始聊天</div>
+            </div>
+        </aside>
+
+        <!-- Chat area -->
+        <main class="chat-area">
+            <div class="chat-placeholder" id="chatPlaceholder">
+                <div class="placeholder-icon">💬</div>
+                <p>选择一个会话开始聊天</p>
+            </div>
+            <div class="chat-container" id="chatContainer" style="display:none">
+                <div class="chat-header">
+                    <span class="chat-title" id="chatTitle"></span>
+                    <span class="chat-members" id="chatMembers"></span>
+                </div>
+                <div class="messages" id="messages">
+                    <button class="load-more" id="loadMoreBtn" onclick="loadMore()" style="display:none">加载更多</button>
+                </div>
+                <div class="input-area">
+                    <textarea id="msgInput" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+                              onkeydown="handleKey(event)"></textarea>
+                    <button class="send-btn" onclick="sendMessage()">发送</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- New Chat Modal -->
+    <div class="modal-overlay" id="modal-newChat" onclick="hideModal(event, 'newChat')">
+        <div class="modal" onclick="event.stopPropagation()">
+            <h3>新建私聊</h3>
+            <input type="text" id="searchUserInput" placeholder="搜索用户名..." oninput="searchUsers()">
+            <div class="search-results" id="searchResults"></div>
+            <button class="modal-close" onclick="hideModal(null, 'newChat')">取消</button>
+        </div>
+    </div>
+
+    <!-- New Group Modal -->
+    <div class="modal-overlay" id="modal-newGroup" onclick="hideModal(event, 'newGroup')">
+        <div class="modal" onclick="event.stopPropagation()">
+            <h3>创建群聊</h3>
+            <input type="text" id="groupName" placeholder="群名称">
+            <input type="text" id="searchGroupUserInput" placeholder="搜索用户添加..." oninput="searchGroupUsers()">
+            <div class="search-results" id="groupSearchResults"></div>
+            <div class="selected-members" id="selectedMembers"></div>
+            <button class="btn-primary" onclick="createGroup()">创建</button>
+            <button class="modal-close" onclick="hideModal(null, 'newGroup')">取消</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="/static/js/chat.js"></script>
+</body>
+</html>

@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理后台</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: #f0f2f5;
+            min-height: 100vh;
+        }
+
+        /* Navbar */
+        .navbar {
+            background: linear-gradient(135deg, #1a1a2e, #0f3460);
+            color: #fff;
+            padding: 0 32px;
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .navbar h1 { font-size: 18px; font-weight: 600; }
+        .navbar-actions { display: flex; gap: 12px; align-items: center; }
+        .navbar a, .navbar button {
+            color: rgba(255,255,255,0.8);
+            text-decoration: none;
+            font-size: 13px;
+            background: none;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 6px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .navbar a:hover, .navbar button:hover {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+
+        /* Container */
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            background: #fff;
+            border-radius: 10px;
+            padding: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+        .tabs button {
+            flex: 1;
+            padding: 10px 16px;
+            border: none;
+            background: none;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #666;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+        .tabs button.active {
+            background: linear-gradient(135deg, #e94560, #0f3460);
+            color: #fff;
+            font-weight: 600;
+        }
+
+        /* Panel */
+        .panel {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            overflow: hidden;
+            display: none;
+        }
+        .panel.active { display: block; }
+        .panel-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .panel-header h2 { font-size: 16px; color: #333; }
+        .panel-header .count {
+            background: #f0f2f5;
+            padding: 2px 10px;
+            border-radius: 10px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        thead th {
+            text-align: left;
+            padding: 10px 20px;
+            font-size: 12px;
+            color: #999;
+            font-weight: 500;
+            text-transform: uppercase;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        tbody td {
+            padding: 12px 20px;
+            font-size: 14px;
+            color: #333;
+            border-bottom: 1px solid #f8f8f8;
+        }
+        tbody tr:hover { background: #fafbfc; }
+        tbody tr:last-child td { border-bottom: none; }
+
+        .user-cell {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .mini-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+        .group-avatar {
+            background: linear-gradient(135deg, #f093fb, #f5576c);
+        }
+
+        /* Buttons */
+        .btn-sm {
+            padding: 5px 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-weight: 500;
+        }
+        .btn-danger {
+            background: #fff2f0;
+            color: #ff4d4f;
+            border: 1px solid #ffccc7;
+        }
+        .btn-danger:hover { background: #ff4d4f; color: #fff; }
+        .btn-edit {
+            background: #f0f5ff;
+            color: #597ef7;
+            border: 1px solid #d6e4ff;
+        }
+        .btn-edit:hover { background: #597ef7; color: #fff; }
+        .actions { display: flex; gap: 6px; }
+
+        .member-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+        .member-tag {
+            padding: 2px 8px;
+            background: #f0f2f5;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #666;
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.35);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            backdrop-filter: blur(2px);
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: #fff;
+            border-radius: 12px;
+            padding: 24px;
+            width: 360px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        .modal h3 { margin-bottom: 16px; font-size: 16px; color: #333; }
+        .modal input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1.5px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            margin-bottom: 12px;
+        }
+        .modal input:focus { border-color: #597ef7; }
+        .modal-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        .modal-actions button {
+            padding: 8px 18px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        .modal-actions .btn-cancel {
+            border: 1px solid #e0e0e0;
+            background: #fff;
+            color: #666;
+        }
+        .modal-actions .btn-confirm {
+            border: none;
+            background: linear-gradient(135deg, #597ef7, #0f3460);
+            color: #fff;
+        }
+
+        .empty-row td {
+            text-align: center;
+            color: #bbb;
+            padding: 32px;
+        }
+
+        .toast {
+            position: fixed;
+            top: 72px;
+            right: 24px;
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            z-index: 200;
+            animation: slideIn 0.3s;
+        }
+        .toast.success { background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f; }
+        .toast.error { background: #fff2f0; color: #ff4d4f; border: 1px solid #ffccc7; }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(30px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <h1>🔒 管理后台</h1>
+        <div class="navbar-actions">
+            <a href="/">← 聊天室</a>
+            <button onclick="adminLogout()">退出</button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="tabs">
+            <button class="active" onclick="switchTab('users')">👤 用户管理</button>
+            <button onclick="switchTab('groups')">👥 群聊管理</button>
+        </div>
+
+        <!-- Users Panel -->
+        <div class="panel active" id="panel-users">
+            <div class="panel-header">
+                <h2>用户列表</h2>
+                <span class="count" id="userCount">0 个用户</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>用户</th>
+                        <th>注册时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="userTableBody">
+                    <tr class="empty-row"><td colspan="4">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Groups Panel -->
+        <div class="panel" id="panel-groups">
+            <div class="panel-header">
+                <h2>群聊列表</h2>
+                <span class="count" id="groupCount">0 个群聊</span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>群名称</th>
+                        <th>创建者</th>
+                        <th>成员</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="groupTableBody">
+                    <tr class="empty-row"><td colspan="5">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Rename Modal -->
+    <div class="modal-overlay" id="renameModal">
+        <div class="modal">
+            <h3>修改群名称</h3>
+            <input type="text" id="renameInput" placeholder="新群名称">
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeRenameModal()">取消</button>
+                <button class="btn-confirm" onclick="confirmRename()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let renameTargetId = null;
+
+        // Tab switching
+        function switchTab(tab) {
+            document.querySelectorAll('.tabs button').forEach((b, i) => {
+                b.classList.toggle('active', (tab === 'users' && i === 0) || (tab === 'groups' && i === 1));
+            });
+            document.getElementById('panel-users').classList.toggle('active', tab === 'users');
+            document.getElementById('panel-groups').classList.toggle('active', tab === 'groups');
+        }
+
+        // Toast
+        function showToast(msg, type = 'success') {
+            const t = document.createElement('div');
+            t.className = `toast ${type}`;
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 3000);
+        }
+
+        // Format time
+        function fmtTime(ts) {
+            return new Date(ts * 1000).toLocaleString('zh-CN');
+        }
+
+        function escapeHtml(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        // ===== Users =====
+        async function loadUsers() {
+            const res = await fetch('/api/admin/users');
+            const data = await res.json();
+            if (!data.ok) { window.location.href = '/admin/login'; return; }
+            const tbody = document.getElementById('userTableBody');
+            document.getElementById('userCount').textContent = `${data.users.length} 个用户`;
+            if (!data.users.length) {
+                tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无用户</td></tr>';
+                return;
+            }
+            tbody.innerHTML = data.users.map(u => `
+                <tr>
+                    <td><code>${u.id}</code></td>
+                    <td>
+                        <div class="user-cell">
+                            <div class="mini-avatar">${escapeHtml(u.username[0].toUpperCase())}</div>
+                            <span>${escapeHtml(u.username)}</span>
+                        </div>
+                    </td>
+                    <td>${fmtTime(u.created_at)}</td>
+                    <td>
+                        <div class="actions">
+                            <button class="btn-sm btn-danger" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')">删除</button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function deleteUser(id, name) {
+            if (!confirm(`确定删除用户「${name}」？该用户的消息和会话也将被清理。`)) return;
+            const res = await fetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+            const data = await res.json();
+            showToast(data.msg, data.ok ? 'success' : 'error');
+            if (data.ok) loadUsers();
+        }
+
+        // ===== Groups =====
+        async function loadGroups() {
+            const res = await fetch('/api/admin/groups');
+            const data = await res.json();
+            if (!data.ok) return;
+            const tbody = document.getElementById('groupTableBody');
+            document.getElementById('groupCount').textContent = `${data.groups.length} 个群聊`;
+            if (!data.groups.length) {
+                tbody.innerHTML = '<tr class="empty-row"><td colspan="5">暂无群聊</td></tr>';
+                return;
+            }
+            tbody.innerHTML = data.groups.map(g => `
+                <tr>
+                    <td><code>${g.id}</code></td>
+                    <td>
+                        <div class="user-cell">
+                            <div class="mini-avatar group-avatar">👥</div>
+                            <span>${escapeHtml(g.name || '未命名')}</span>
+                        </div>
+                    </td>
+                    <td>${escapeHtml(g.creator_name || '未知')}</td>
+                    <td>
+                        <div class="member-tags">
+                            ${g.members.slice(0, 5).map(m => `<span class="member-tag">${escapeHtml(m.username)}</span>`).join('')}
+                            ${g.members.length > 5 ? `<span class="member-tag">+${g.members.length - 5}</span>` : ''}
+                        </div>
+                    </td>
+                    <td>
+                        <div class="actions">
+                            <button class="btn-sm btn-edit" onclick="openRenameModal(${g.id}, '${escapeHtml(g.name || '')}')">改名</button>
+                            <button class="btn-sm btn-danger" onclick="deleteGroup(${g.id}, '${escapeHtml(g.name || '')}')">删除</button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function openRenameModal(id, currentName) {
+            renameTargetId = id;
+            document.getElementById('renameInput').value = currentName;
+            document.getElementById('renameModal').classList.add('show');
+            document.getElementById('renameInput').focus();
+        }
+
+        function closeRenameModal() {
+            document.getElementById('renameModal').classList.remove('show');
+            renameTargetId = null;
+        }
+
+        async function confirmRename() {
+            const name = document.getElementById('renameInput').value.trim();
+            if (!name) return;
+            const res = await fetch(`/api/admin/groups/${renameTargetId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+            const data = await res.json();
+            showToast(data.msg, data.ok ? 'success' : 'error');
+            closeRenameModal();
+            if (data.ok) loadGroups();
+        }
+
+        async function deleteGroup(id, name) {
+            if (!confirm(`确定删除群聊「${name}」？群内所有消息将被删除。`)) return;
+            const res = await fetch(`/api/admin/groups/${id}`, { method: 'DELETE' });
+            const data = await res.json();
+            showToast(data.msg, data.ok ? 'success' : 'error');
+            if (data.ok) loadGroups();
+        }
+
+        // ===== Logout =====
+        async function adminLogout() {
+            await fetch('/api/admin/logout', { method: 'POST' });
+            window.location.href = '/admin/login';
+        }
+
+        // ===== Init =====
+        loadUsers();
+        loadGroups();
+    </script>
+</body>
+</html>

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>聊天室 - 登录</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .card {
+            background: #fff;
+            border-radius: 16px;
+            padding: 40px;
+            width: 380px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+        }
+        .card h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 24px;
+        }
+        .card .subtitle {
+            text-align: center;
+            color: #999;
+            margin-bottom: 32px;
+            font-size: 14px;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 24px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        .tabs button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            background: none;
+            font-size: 15px;
+            color: #999;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+        .tabs button.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+            font-weight: 600;
+        }
+        .form-group {
+            margin-bottom: 18px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            color: #555;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1.5px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .form-group input:focus {
+            border-color: #667eea;
+        }
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+            margin-top: 8px;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .msg {
+            text-align: center;
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 13px;
+            margin-bottom: 12px;
+            display: none;
+        }
+        .msg.error { display: block; background: #fff2f0; color: #ff4d4f; border: 1px solid #ffccc7; }
+        .msg.success { display: block; background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>💬 聊天室</h1>
+        <p class="subtitle">与朋友实时交流</p>
+        <div class="tabs">
+            <button class="active" onclick="switchTab('login')">登录</button>
+            <button onclick="switchTab('register')">注册</button>
+        </div>
+        <div id="msgBox" class="msg"></div>
+        <form id="loginForm" onsubmit="return handleLogin(event)">
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="loginUser" required autocomplete="username" placeholder="请输入用户名">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="loginPass" required autocomplete="current-password" placeholder="请输入密码">
+            </div>
+            <button class="btn" type="submit">登 录</button>
+        </form>
+        <form id="registerForm" style="display:none" onsubmit="return handleRegister(event)">
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="regUser" required autocomplete="username" placeholder="2-20个字符">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" id="regPass" required autocomplete="new-password" placeholder="至少4个字符">
+            </div>
+            <div class="form-group">
+                <label>确认密码</label>
+                <input type="password" id="regPass2" required autocomplete="new-password" placeholder="再次输入密码">
+            </div>
+            <button class="btn" type="submit">注 册</button>
+        </form>
+    </div>
+    <script>
+        function switchTab(tab) {
+            document.querySelectorAll('.tabs button').forEach((b, i) => {
+                b.classList.toggle('active', (tab === 'login' && i === 0) || (tab === 'register' && i === 1));
+            });
+            document.getElementById('loginForm').style.display = tab === 'login' ? 'block' : 'none';
+            document.getElementById('registerForm').style.display = tab === 'register' ? 'block' : 'none';
+            showMsg('', '');
+        }
+
+        function showMsg(text, type) {
+            const box = document.getElementById('msgBox');
+            box.className = 'msg' + (type ? ' ' + type : '');
+            box.textContent = text;
+        }
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            const username = document.getElementById('loginUser').value.trim();
+            const password = document.getElementById('loginPass').value;
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username, password})
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    window.location.href = '/chat';
+                } else {
+                    showMsg(data.msg, 'error');
+                }
+            } catch {
+                showMsg('网络错误', 'error');
+            }
+            return false;
+        }
+
+        async function handleRegister(e) {
+            e.preventDefault();
+            const username = document.getElementById('regUser').value.trim();
+            const password = document.getElementById('regPass').value;
+            const password2 = document.getElementById('regPass2').value;
+            if (password !== password2) {
+                showMsg('两次密码不一致', 'error');
+                return false;
+            }
+            try {
+                const res = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username, password})
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    showMsg('注册成功，请登录', 'success');
+                    setTimeout(() => switchTab('login'), 1000);
+                } else {
+                    showMsg(data.msg, 'error');
+                }
+            } catch {
+                showMsg('网络错误', 'error');
+            }
+            return false;
+        }
+    </script>
+</body>
+</html>
