@@ -8,7 +8,7 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #F4F6F8;
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -16,81 +16,88 @@
         }
         .card {
             background: #fff;
-            border-radius: 16px;
-            padding: 40px;
+            border-radius: 14px;
+            padding: 38px 40px 40px;
             width: 380px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 20px rgba(15,23,42,0.08);
+            border: 1px solid #E4E8ED;
         }
         .card h1 {
             text-align: center;
-            color: #333;
-            margin-bottom: 8px;
-            font-size: 24px;
+            color: #1E2A38;
+            margin-bottom: 6px;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
         }
         .card .subtitle {
             text-align: center;
-            color: #999;
-            margin-bottom: 32px;
-            font-size: 14px;
+            color: #8A97A8;
+            margin-bottom: 28px;
+            font-size: 13px;
         }
         .tabs {
             display: flex;
-            margin-bottom: 24px;
-            border-bottom: 2px solid #f0f0f0;
+            margin-bottom: 22px;
+            border-bottom: 1.5px solid #E4E8ED;
         }
         .tabs button {
             flex: 1;
-            padding: 10px;
+            padding: 9px;
             border: none;
             background: none;
-            font-size: 15px;
-            color: #999;
+            font-size: 14px;
+            color: #8A97A8;
             cursor: pointer;
             transition: all 0.2s;
             border-bottom: 2px solid transparent;
-            margin-bottom: -2px;
+            margin-bottom: -1.5px;
+            font-weight: 500;
         }
         .tabs button.active {
-            color: #667eea;
-            border-bottom-color: #667eea;
+            color: #2563EB;
+            border-bottom-color: #2563EB;
             font-weight: 600;
         }
         .form-group {
-            margin-bottom: 18px;
+            margin-bottom: 16px;
         }
         .form-group label {
             display: block;
-            margin-bottom: 6px;
-            color: #555;
+            margin-bottom: 5px;
+            color: #4A5568;
             font-size: 13px;
             font-weight: 500;
         }
         .form-group input {
             width: 100%;
-            padding: 10px 14px;
-            border: 1.5px solid #e0e0e0;
+            padding: 9px 13px;
+            border: 1.5px solid #E4E8ED;
             border-radius: 8px;
             font-size: 14px;
             outline: none;
             transition: border-color 0.2s;
+            background: #F8FAFB;
+            color: #1E2A38;
         }
         .form-group input:focus {
-            border-color: #667eea;
+            border-color: #2563EB;
+            background: #fff;
         }
         .btn {
             width: 100%;
-            padding: 12px;
+            padding: 11px;
             border: none;
             border-radius: 8px;
-            background: linear-gradient(135deg, #667eea, #764ba2);
+            background: #2563EB;
             color: #fff;
             font-size: 15px;
             font-weight: 600;
             cursor: pointer;
-            transition: opacity 0.2s;
-            margin-top: 8px;
+            transition: background 0.15s;
+            margin-top: 6px;
         }
-        .btn:hover { opacity: 0.9; }
+        .btn:hover { background: #1D4ED8; }
         .btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .msg {
             text-align: center;
@@ -100,13 +107,13 @@
             margin-bottom: 12px;
             display: none;
         }
-        .msg.error { display: block; background: #fff2f0; color: #ff4d4f; border: 1px solid #ffccc7; }
-        .msg.success { display: block; background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f; }
+        .msg.error { display: block; background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; }
+        .msg.success { display: block; background: #F0FDF4; color: #16A34A; border: 1px solid #BBF7D0; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>💬 聊天室</h1>
+        <h1>聊天室</h1>
         <p class="subtitle">与朋友实时交流</p>
         <div class="tabs">
             <button class="active" onclick="switchTab('login')">登录</button>
