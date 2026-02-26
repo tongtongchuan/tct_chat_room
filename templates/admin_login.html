@@ -8,7 +8,7 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            background: #F4F6F8;
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -16,57 +16,65 @@
         }
         .card {
             background: #fff;
-            border-radius: 16px;
-            padding: 40px;
+            border-radius: 14px;
+            padding: 38px 40px 40px;
             width: 380px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 20px rgba(15,23,42,0.08);
+            border: 1px solid #E4E8ED;
         }
         .card h1 {
             text-align: center;
-            color: #333;
-            margin-bottom: 8px;
-            font-size: 24px;
+            color: #1E2A38;
+            margin-bottom: 6px;
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
         }
         .card .subtitle {
             text-align: center;
-            color: #999;
-            margin-bottom: 32px;
-            font-size: 14px;
+            color: #8A97A8;
+            margin-bottom: 28px;
+            font-size: 13px;
         }
         .form-group {
-            margin-bottom: 18px;
+            margin-bottom: 16px;
         }
         .form-group label {
             display: block;
-            margin-bottom: 6px;
-            color: #555;
+            margin-bottom: 5px;
+            color: #4A5568;
             font-size: 13px;
             font-weight: 500;
         }
         .form-group input {
             width: 100%;
-            padding: 10px 14px;
-            border: 1.5px solid #e0e0e0;
+            padding: 9px 13px;
+            border: 1.5px solid #E4E8ED;
             border-radius: 8px;
             font-size: 14px;
             outline: none;
             transition: border-color 0.2s;
+            background: #F8FAFB;
+            color: #1E2A38;
         }
-        .form-group input:focus { border-color: #e94560; }
+        .form-group input:focus {
+            border-color: #2563EB;
+            background: #fff;
+        }
         .btn {
             width: 100%;
-            padding: 12px;
+            padding: 11px;
             border: none;
             border-radius: 8px;
-            background: linear-gradient(135deg, #e94560, #0f3460);
+            background: #2563EB;
             color: #fff;
             font-size: 15px;
             font-weight: 600;
             cursor: pointer;
-            transition: opacity 0.2s;
-            margin-top: 8px;
+            transition: background 0.15s;
+            margin-top: 6px;
         }
-        .btn:hover { opacity: 0.9; }
+        .btn:hover { background: #1D4ED8; }
         .msg {
             text-align: center;
             padding: 8px;
@@ -75,21 +83,21 @@
             margin-bottom: 12px;
             display: none;
         }
-        .msg.error { display: block; background: #fff2f0; color: #ff4d4f; border: 1px solid #ffccc7; }
+        .msg.error { display: block; background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; }
         .back-link {
             display: block;
             text-align: center;
             margin-top: 16px;
-            color: #999;
+            color: #8A97A8;
             font-size: 13px;
             text-decoration: none;
         }
-        .back-link:hover { color: #666; }
+        .back-link:hover { color: #4A5568; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>🔒 管理后台</h1>
+        <h1>管理后台</h1>
         <p class="subtitle">请输入管理员密码</p>
         <div id="msgBox" class="msg"></div>
         <form onsubmit="return handleLogin(event)">
