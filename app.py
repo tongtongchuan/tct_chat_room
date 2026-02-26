@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
-from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_socketio import SocketIO, emit, join_room
 import database as db
 import os
 import json
@@ -9,7 +9,7 @@ from argon2.exceptions import VerifyMismatchError
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 
-DEBUG = os.environ.get('FLASK_DEBUG', '1') == '1'
+DEBUG = False # get debug mode
 
 if DEBUG:
     socketio = SocketIO(app, cors_allowed_origins="*")

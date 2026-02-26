@@ -1,7 +1,8 @@
 import sqlite3
-import hashlib
 import os
 import time
+from argon2 import PasswordHasher, Type
+from argon2.exceptions import VerifyMismatchError
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chatroom.db')
 
@@ -27,7 +28,6 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
-        salt TEXT NOT NULL,
         created_at REAL NOT NULL
     )''')
 
@@ -64,20 +64,16 @@ def init_db():
     _db_initialized = True
 
 
-def hash_password(password, salt=None):
-    if salt is None:
-        salt = os.urandom(32).hex()
-    h = hashlib.sha256((salt + password).encode('utf-8')).hexdigest()
-    return h, salt
+_ph = PasswordHasher(type=Type.ID)  # argon2id
 
 
 def create_user(username, password):
     conn = get_db()
     try:
-        password_hash, salt = hash_password(password)
+        password_hash = _ph.hash(password)
         conn.execute(
-            'INSERT INTO users (username, password_hash, salt, created_at) VALUES (?, ?, ?, ?)',
-            (username, password_hash, salt, time.time())
+            'INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)',
+            (username, password_hash, time.time())
         )
         conn.commit()
         return True, '注册成功'
@@ -93,10 +89,11 @@ def verify_user(username, password):
     conn.close()
     if not user:
         return None
-    h, _ = hash_password(password, user['salt'])
-    if h == user['password_hash']:
+    try:
+        _ph.verify(user['password_hash'], password)
         return dict(user)
-    return None
+    except VerifyMismatchError:
+        return None
 
 
 def get_user_by_id(user_id):
