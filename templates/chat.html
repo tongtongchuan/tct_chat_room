@@ -14,21 +14,56 @@
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="user-info">
+                <div class="user-info" style="cursor:pointer" onclick="openSettings('profile')" title="点击查看个人资料">
                     <span class="avatar" id="myAvatar"></span>
                     <span class="username" id="myName"></span>
                 </div>
                 <div class="header-actions">
                     <button class="icon-btn" title="消息通知" id="toggleNotif" onclick="toggleNotifications()">🔔</button>
+                    <button class="icon-btn" title="设置" onclick="openSettings('profile')">⚙️</button>
                     <button class="icon-btn" title="退出" onclick="doLogout()">↩</button>
                 </div>
             </div>
-            <div class="sidebar-actions">
-                <button class="action-btn" onclick="showModal('newChat')">新对话</button>
-                <button class="action-btn" onclick="showModal('newGroup')">创建群聊</button>
+
+            <!-- Sidebar Tabs -->
+            <div class="sidebar-tabs">
+                <button class="sidebar-tab active" id="tab-chats" onclick="switchSidebarTab('chats')">💬 消息</button>
+                <button class="sidebar-tab" id="tab-contacts" onclick="switchSidebarTab('contacts')">
+                    👥 通讯录
+                    <span class="badge" id="contactsBadge" style="display:none"></span>
+                </button>
             </div>
-            <div class="conv-list" id="convList">
-                <div class="empty-hint">暂无会话，点击上方开始聊天</div>
+
+            <!-- Chats Panel -->
+            <div id="panel-chats">
+                <div class="sidebar-actions">
+                    <button class="action-btn" onclick="showModal('newChat')">新对话</button>
+                    <button class="action-btn" onclick="showModal('newGroup')">创建群聊</button>
+                </div>
+                <div class="conv-list" id="convList">
+                    <div class="empty-hint">暂无会话，点击上方开始聊天</div>
+                </div>
+            </div>
+
+            <!-- Contacts Panel -->
+            <div id="panel-contacts" style="display:none; flex:1; overflow:hidden; display:none; flex-direction:column">
+                <div class="sidebar-actions">
+                    <button class="action-btn" onclick="showModal('addFriend')">添加好友</button>
+                </div>
+                <!-- Friend Requests -->
+                <div id="friendRequestsSection" style="display:none">
+                    <div class="contacts-section-title" onclick="toggleFriendRequests()">
+                        🔔 新的朋友
+                        <span class="badge" id="reqBadge"></span>
+                        <span id="reqChevron" style="margin-left:auto">▼</span>
+                    </div>
+                    <div id="friendRequestsList"></div>
+                </div>
+                <!-- Friends List -->
+                <div class="contacts-section-title">我的好友</div>
+                <div class="contacts-list" id="friendsList">
+                    <div class="empty-hint">暂无好友，点击上方添加</div>
+                </div>
             </div>
         </aside>
 
@@ -42,6 +77,10 @@
                 <div class="chat-header">
                     <span class="chat-title" id="chatTitle"></span>
                     <span class="chat-members" id="chatMembers"></span>
+                    <div style="margin-left:auto; display:flex; gap:4px">
+                        <button class="icon-btn" id="groupSettingsBtn" title="群聊设置"
+                                onclick="openGroupSettings()" style="display:none">⚙️</button>
+                    </div>
                 </div>
                 <div class="messages" id="messages">
                     <button class="load-more" id="loadMoreBtn" onclick="loadMore()" style="display:none">加载更多</button>
@@ -53,6 +92,15 @@
                 </div>
             </div>
         </main>
+
+        <!-- Group Settings Panel -->
+        <aside class="group-settings-panel" id="groupSettingsPanel" style="display:none">
+            <div class="gsp-header">
+                <span>群聊设置</span>
+                <button class="icon-btn" onclick="closeGroupSettings()">✕</button>
+            </div>
+            <div class="gsp-body" id="gspBody"></div>
+        </aside>
     </div>
 
     <!-- New Chat Modal -->
@@ -75,6 +123,124 @@
             <div class="selected-members" id="selectedMembers"></div>
             <button class="btn-primary" onclick="createGroup()">创建</button>
             <button class="modal-close" onclick="hideModal(null, 'newGroup')">取消</button>
+        </div>
+    </div>
+
+    <!-- Add Friend Modal -->
+    <div class="modal-overlay" id="modal-addFriend" onclick="hideModal(event, 'addFriend')">
+        <div class="modal" onclick="event.stopPropagation()">
+            <h3>添加好友</h3>
+            <input type="text" id="searchFriendInput" placeholder="搜索用户名..." oninput="searchFriendUsers()">
+            <div class="search-results" id="friendSearchResults"></div>
+            <button class="modal-close" onclick="hideModal(null, 'addFriend')">关闭</button>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsModal" onclick="closeSettingsIfOverlay(event)">
+        <div class="settings-dialog" onclick="event.stopPropagation()">
+            <div class="settings-sidebar">
+                <div class="settings-user">
+                    <span class="avatar" id="settingsAvatar" style="width:48px;height:48px;font-size:20px"></span>
+                    <span id="settingsUsername"></span>
+                </div>
+                <button class="settings-nav-item active" id="snav-profile" onclick="switchSettingsTab('profile')">👤 个人资料</button>
+                <button class="settings-nav-item" id="snav-security" onclick="switchSettingsTab('security')">🔒 账号安全</button>
+                <button class="settings-nav-item" id="snav-appearance" onclick="switchSettingsTab('appearance')">🎨 个性化</button>
+                <button class="settings-nav-item" id="snav-notification" onclick="switchSettingsTab('notification')">🔔 通知设置</button>
+            </div>
+            <div class="settings-content">
+                <button class="icon-btn" style="position:absolute;top:14px;right:14px" onclick="closeSettings()">✕</button>
+
+                <!-- Profile Tab -->
+                <div class="settings-tab" id="stab-profile">
+                    <h2 class="settings-title">个人资料</h2>
+                    <div class="settings-group">
+                        <label class="settings-label">头像</label>
+                        <div class="avatar-picker" id="avatarPicker"></div>
+                    </div>
+                    <div class="settings-group">
+                        <label class="settings-label">用户名</label>
+                        <div class="settings-value" id="profileUsername"></div>
+                    </div>
+                    <div class="settings-group">
+                        <label class="settings-label">个性签名</label>
+                        <textarea class="settings-textarea" id="profileBio" placeholder="介绍一下自己..." maxlength="100"></textarea>
+                    </div>
+                    <button class="btn-save" onclick="saveProfile()">保存修改</button>
+                </div>
+
+                <!-- Security Tab -->
+                <div class="settings-tab" id="stab-security" style="display:none">
+                    <h2 class="settings-title">账号安全</h2>
+                    <div class="settings-group">
+                        <label class="settings-label">修改密码</label>
+                        <input type="password" class="settings-input" id="oldPassword" placeholder="当前密码">
+                        <input type="password" class="settings-input" id="newPassword" placeholder="新密码（至少4位）" style="margin-top:8px">
+                        <input type="password" class="settings-input" id="newPassword2" placeholder="确认新密码" style="margin-top:8px">
+                    </div>
+                    <button class="btn-save" onclick="savePassword()">修改密码</button>
+                    <div style="margin-top:24px; padding-top:16px; border-top:1px solid var(--border)">
+                        <label class="settings-label">登录会话</label>
+                        <p style="color:var(--text-3);font-size:13px;margin-top:4px">修改密码后将自动退出所有设备</p>
+                    </div>
+                </div>
+
+                <!-- Appearance Tab -->
+                <div class="settings-tab" id="stab-appearance" style="display:none">
+                    <h2 class="settings-title">个性化</h2>
+                    <div class="settings-group">
+                        <label class="settings-label">主题</label>
+                        <div class="theme-options">
+                            <div class="theme-option" id="theme-light" onclick="setTheme('light')">
+                                <div class="theme-preview light-preview"></div>
+                                <span>浅色</span>
+                            </div>
+                            <div class="theme-option" id="theme-dark" onclick="setTheme('dark')">
+                                <div class="theme-preview dark-preview"></div>
+                                <span>深色</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <label class="settings-label">字体大小</label>
+                        <div class="font-size-options">
+                            <button class="font-opt" id="font-small" onclick="setFontSize('small')">小</button>
+                            <button class="font-opt" id="font-medium" onclick="setFontSize('medium')">中</button>
+                            <button class="font-opt" id="font-large" onclick="setFontSize('large')">大</button>
+                        </div>
+                        <p class="settings-preview-text" id="fontPreview">这是字体预览文字</p>
+                    </div>
+                    <button class="btn-save" onclick="saveAppearance()">保存</button>
+                </div>
+
+                <!-- Notification Tab -->
+                <div class="settings-tab" id="stab-notification" style="display:none">
+                    <h2 class="settings-title">通知设置</h2>
+                    <div class="settings-group">
+                        <div class="settings-toggle-row">
+                            <div>
+                                <div class="settings-label">消息通知</div>
+                                <div style="color:var(--text-3);font-size:12px;margin-top:2px">收到新消息时显示弹窗提醒</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="notifToggle" onchange="toggleNotifSetting()">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="settings-toggle-row" style="margin-top:12px">
+                            <div>
+                                <div class="settings-label">好友请求通知</div>
+                                <div style="color:var(--text-3);font-size:12px;margin-top:2px">收到好友请求时显示提醒</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="friendReqNotifToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

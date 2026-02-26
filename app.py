@@ -53,6 +53,10 @@ def register():
     data = request.json
     username = data.get('username', '').strip()
     password = data.get('password', '')
+    # Check if registration is enabled
+    settings = db.get_system_settings()
+    if settings.get('registration_enabled', '1') == '0':
+        return jsonify({'ok': False, 'msg': '注册已关闭'})
     if not username or not password:
         return jsonify({'ok': False, 'msg': '用户名和密码不能为空'})
     if len(username) < 2 or len(username) > 20:
@@ -70,6 +74,8 @@ def api_login():
     password = data.get('password', '')
     user = db.verify_user(username, password)
     if user:
+        if user.get('is_banned'):
+            return jsonify({'ok': False, 'msg': '账号已被封禁，请联系管理员'})
         session['user_id'] = user['id']
         session['username'] = user['username']
         return jsonify({'ok': True, 'user': {'id': user['id'], 'username': user['username']}})
@@ -152,7 +158,194 @@ def search_users():
     return jsonify({'ok': True, 'users': users})
 
 
-# ---------- Socket.IO Events ----------
+# ---------- Profile & Settings API ----------
+
+@app.route('/api/profile')
+def get_profile():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    profile = db.get_profile(session['user_id'])
+    return jsonify({'ok': True, 'profile': profile})
+
+
+@app.route('/api/profile', methods=['PUT'])
+def update_profile():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    data = request.json or {}
+    avatar_emoji = data.get('avatar_emoji')
+    bio = data.get('bio')
+    theme = data.get('theme')
+    font_size = data.get('font_size')
+    if theme and theme not in ('light', 'dark'):
+        return jsonify({'ok': False, 'msg': '无效的主题'})
+    if font_size and font_size not in ('small', 'medium', 'large'):
+        return jsonify({'ok': False, 'msg': '无效的字体大小'})
+    if bio is not None and len(bio) > 100:
+        return jsonify({'ok': False, 'msg': '个性签名最多100个字符'})
+    db.update_profile(session['user_id'], avatar_emoji=avatar_emoji, bio=bio,
+                      theme=theme, font_size=font_size)
+    return jsonify({'ok': True, 'msg': '设置已保存'})
+
+
+@app.route('/api/settings/password', methods=['POST'])
+def change_password():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    data = request.json or {}
+    old_password = data.get('old_password', '')
+    new_password = data.get('new_password', '')
+    if not old_password or not new_password:
+        return jsonify({'ok': False, 'msg': '请填写完整'})
+    if len(new_password) < 4:
+        return jsonify({'ok': False, 'msg': '新密码至少4个字符'})
+    ok, msg = db.change_password(session['user_id'], old_password, new_password)
+    if ok:
+        session.clear()
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+# ---------- Contacts / Friends API ----------
+
+@app.route('/api/contacts')
+def get_contacts():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    friends = db.get_friends(session['user_id'])
+    pending_count = db.get_pending_request_count(session['user_id'])
+    return jsonify({'ok': True, 'friends': friends, 'pending_count': pending_count})
+
+
+@app.route('/api/contacts/requests')
+def get_friend_requests():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    requests = db.get_friend_requests(session['user_id'])
+    return jsonify({'ok': True, 'requests': requests})
+
+
+@app.route('/api/contacts/request', methods=['POST'])
+def send_friend_request():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    settings = db.get_system_settings()
+    if settings.get('allow_friend_requests', '1') == '0':
+        return jsonify({'ok': False, 'msg': '好友功能已关闭'})
+    target_id = request.json.get('user_id')
+    if not target_id or target_id == session['user_id']:
+        return jsonify({'ok': False, 'msg': '无效用户'})
+    ok, msg = db.send_friend_request(session['user_id'], target_id)
+    if ok:
+        # Notify target user via Socket.IO
+        if target_id in online_users:
+            for sid in online_users[target_id]:
+                socketio.emit('friend_request', {
+                    'from_id': session['user_id'],
+                    'from_name': session['username']
+                }, room=sid)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/contacts/requests/<int:request_id>/accept', methods=['POST'])
+def accept_friend_request(request_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.accept_friend_request(request_id, session['user_id'])
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/contacts/requests/<int:request_id>/reject', methods=['POST'])
+def reject_friend_request(request_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.reject_friend_request(request_id, session['user_id'])
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/contacts/<int:friend_id>', methods=['DELETE'])
+def remove_friend(friend_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.remove_friend(session['user_id'], friend_id)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+# ---------- Group Settings API ----------
+
+@app.route('/api/conversations/<int:conv_id>/settings')
+def get_group_settings(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    if not db.is_member(conv_id, session['user_id']):
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    settings = db.get_group_settings(conv_id, session['user_id'])
+    if not settings:
+        return jsonify({'ok': False, 'msg': '群聊不存在'}), 404
+    return jsonify({'ok': True, 'settings': settings})
+
+
+@app.route('/api/conversations/<int:conv_id>/name', methods=['PUT'])
+def update_group_name(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    new_name = (request.json or {}).get('name', '').strip()
+    if not new_name:
+        return jsonify({'ok': False, 'msg': '群名不能为空'})
+    ok, msg = db.update_group_name(conv_id, session['user_id'], new_name)
+    if ok:
+        socketio.emit('group_updated', {'conversation_id': conv_id, 'name': new_name},
+                      room=f'conv_{conv_id}')
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/members', methods=['POST'])
+def add_group_member(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    new_member_id = (request.json or {}).get('user_id')
+    if not new_member_id:
+        return jsonify({'ok': False, 'msg': '无效用户'})
+    ok, msg = db.add_group_member(conv_id, session['user_id'], new_member_id)
+    if ok and new_member_id in online_users:
+        for sid in online_users[new_member_id]:
+            socketio.emit('conversation_created', {'conversation_id': conv_id}, room=sid)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/members/<int:member_id>', methods=['DELETE'])
+def remove_group_member(conv_id, member_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.remove_group_member(conv_id, session['user_id'], member_id)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/members/<int:member_id>/role', methods=['PUT'])
+def set_member_role(conv_id, member_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    role = (request.json or {}).get('role', '')
+    ok, msg = db.set_member_role(conv_id, session['user_id'], member_id, role)
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/leave', methods=['POST'])
+def leave_group(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.leave_group(conv_id, session['user_id'])
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/transfer', methods=['POST'])
+def transfer_group_owner(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    new_owner_id = (request.json or {}).get('user_id')
+    if not new_owner_id:
+        return jsonify({'ok': False, 'msg': '无效用户'})
+    ok, msg = db.transfer_group_owner(conv_id, session['user_id'], new_owner_id)
+    return jsonify({'ok': ok, 'msg': msg})
 
 @socketio.on('connect')
 def on_connect():
@@ -195,6 +388,11 @@ def on_send(data):
     if not conv_id or not content:
         return
     if not db.is_member(conv_id, uid):
+        return
+    # Enforce max message length from system settings
+    settings = db.get_system_settings()
+    max_len = int(settings.get('max_message_length', '2000'))
+    if len(content) > max_len:
         return
     msg = db.save_message(conv_id, uid, content)
     msg['sender_name'] = session.get('username')
@@ -272,6 +470,18 @@ def admin_delete_user(user_id):
     return jsonify({'ok': True, 'msg': f'用户 {user["username"]} 已删除'})
 
 
+@app.route('/api/admin/users/<int:user_id>/ban', methods=['PUT'])
+@require_admin
+def admin_ban_user(user_id):
+    user = db.get_user_by_id(user_id)
+    if not user:
+        return jsonify({'ok': False, 'msg': '用户不存在'})
+    ban = (request.json or {}).get('ban', True)
+    db.ban_user(user_id, ban)
+    action = '封禁' if ban else '解封'
+    return jsonify({'ok': True, 'msg': f'用户 {user["username"]} 已{action}'})
+
+
 @app.route('/api/admin/groups')
 @require_admin
 def admin_get_groups():
@@ -294,6 +504,32 @@ def admin_rename_group(conv_id):
 def admin_delete_group(conv_id):
     db.delete_group(conv_id)
     return jsonify({'ok': True, 'msg': '群聊已删除'})
+
+
+@app.route('/api/admin/stats')
+@require_admin
+def admin_get_stats():
+    stats = db.get_admin_stats()
+    return jsonify({'ok': True, 'stats': stats})
+
+
+@app.route('/api/admin/system-settings')
+@require_admin
+def admin_get_system_settings():
+    settings = db.get_system_settings()
+    return jsonify({'ok': True, 'settings': settings})
+
+
+@app.route('/api/admin/system-settings', methods=['PUT'])
+@require_admin
+def admin_update_system_settings():
+    data = request.json or {}
+    allowed_keys = ('registration_enabled', 'max_message_length', 'system_name',
+                    'allow_friend_requests')
+    for key in allowed_keys:
+        if key in data:
+            db.update_system_setting(key, str(data[key]))
+    return jsonify({'ok': True, 'msg': '系统设置已更新'})
 
 
 if __name__ == '__main__':
