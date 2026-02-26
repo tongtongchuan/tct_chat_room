@@ -230,6 +230,12 @@ def get_user_by_id(user_id):
     return dict(user) if user else None
 
 
+def is_user_banned(user_id):
+    with db_conn() as conn:
+        row = conn.execute('SELECT is_banned FROM users WHERE id = ?', (user_id,)).fetchone()
+    return bool(row and row['is_banned'])
+
+
 def search_users(query, exclude_id=None):
     with db_conn() as conn:
         if exclude_id:
@@ -248,6 +254,7 @@ def search_users(query, exclude_id=None):
 def create_self_conversation(user_id):
     """Return (or create) the user's private self-chat / notes conversation."""
     with db_conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
         existing = conn.execute(
             '''SELECT c.id FROM conversations c
                JOIN conversation_members cm ON c.id = cm.conversation_id
@@ -255,6 +262,7 @@ def create_self_conversation(user_id):
             (user_id,)
         ).fetchone()
         if existing:
+            conn.execute('ROLLBACK')
             return existing['id']
         now = time.time()
         c = conn.cursor()
@@ -432,14 +440,48 @@ def is_member(conversation_id, user_id):
 
 # ===== Storage functions =====
 
-def record_file_upload(user_id: int, file_path: str, file_size: int):
-    """Record a file upload; idempotent (IGNORE on duplicate path)."""
+def verify_file_owner(user_id: int, file_path: str) -> bool:
+    """Check that the file_path was uploaded by this user."""
     with db_conn() as conn:
+        row = conn.execute(
+            'SELECT 1 FROM user_files WHERE user_id = ? AND file_path = ?',
+            (user_id, file_path)
+        ).fetchone()
+    return row is not None
+
+
+def record_file_upload(user_id: int, file_path: str, file_size: int) -> bool:
+    """Record a file upload atomically with quota check. Returns False if quota exceeded."""
+    with db_conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute(
+            'SELECT COALESCE(SUM(file_size), 0) as used FROM user_files WHERE user_id = ?',
+            (user_id,)
+        ).fetchone()
+        used = row['used'] if row else 0
+
+        quota_row = conn.execute(
+            'SELECT storage_quota_mb FROM user_profiles WHERE user_id = ?', (user_id,)
+        ).fetchone()
+        if quota_row and quota_row['storage_quota_mb'] is not None:
+            quota_mb = quota_row['storage_quota_mb']
+        else:
+            setting = conn.execute(
+                "SELECT value FROM system_settings WHERE key = 'default_storage_quota_mb'"
+            ).fetchone()
+            quota_mb = int(setting['value']) if setting else 10240
+        quota_bytes = quota_mb * 1024 * 1024
+
+        if used + file_size > quota_bytes:
+            conn.execute('ROLLBACK')
+            return False
+
         conn.execute(
             'INSERT OR IGNORE INTO user_files (user_id, file_path, file_size, uploaded_at) VALUES (?, ?, ?, ?)',
             (user_id, file_path, file_size, time.time())
         )
         conn.commit()
+    return True
 
 
 def get_user_storage_info(user_id: int) -> dict:
