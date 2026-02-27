@@ -68,6 +68,8 @@ def _init_db_locked():
             name TEXT,
             is_group INTEGER NOT NULL DEFAULT 0,
             is_self_chat INTEGER NOT NULL DEFAULT 0,
+            avatar_url TEXT,
+            announcement TEXT NOT NULL DEFAULT '',
             created_by INTEGER,
             created_at REAL NOT NULL,
             FOREIGN KEY (created_by) REFERENCES users(id)
@@ -91,10 +93,26 @@ def _init_db_locked():
             content TEXT NOT NULL,
             msg_type TEXT NOT NULL DEFAULT 'text',
             media_url TEXT,
+            is_revoked INTEGER NOT NULL DEFAULT 0,
+            edited_at REAL,
+            original_message_id INTEGER,
             timestamp REAL NOT NULL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id),
             FOREIGN KEY (sender_id) REFERENCES users(id)
         )''')
+
+        c.execute('''CREATE TABLE IF NOT EXISTS favorite_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            created_at REAL NOT NULL,
+            UNIQUE(user_id, message_id),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (message_id) REFERENCES messages(id)
+        )''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorite_messages(user_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_favorites_user_created ON favorite_messages(user_id, created_at DESC)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_favorites_msg ON favorite_messages(message_id)')
 
         c.execute('''CREATE TABLE IF NOT EXISTS user_profiles (
             user_id INTEGER PRIMARY KEY,
@@ -105,6 +123,19 @@ def _init_db_locked():
             font_size TEXT NOT NULL DEFAULT 'medium',
             FOREIGN KEY (user_id) REFERENCES users(id)
         )''')
+
+        c.execute('''CREATE TABLE IF NOT EXISTS pinned_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            pinned_by INTEGER NOT NULL,
+            pinned_at REAL NOT NULL,
+            UNIQUE(conversation_id, message_id),
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id),
+            FOREIGN KEY (message_id) REFERENCES messages(id),
+            FOREIGN KEY (pinned_by) REFERENCES users(id)
+        )''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_pinned_conv ON pinned_messages(conversation_id, pinned_at DESC)')
 
         # friends: normalized – always store min(a,b) as requester_id, max(a,b) as addressee_id.
         # initiated_by tracks who actually sent the request.
@@ -154,9 +185,14 @@ def _init_db_locked():
         _safe_add_column(c, 'conversations',        'is_self_chat INTEGER NOT NULL DEFAULT 0')
         _safe_add_column(c, 'messages',             "msg_type TEXT NOT NULL DEFAULT 'text'")
         _safe_add_column(c, 'messages',             'media_url TEXT')
+        _safe_add_column(c, 'messages',             'is_revoked INTEGER NOT NULL DEFAULT 0')
+        _safe_add_column(c, 'messages',             'edited_at REAL')
+        _safe_add_column(c, 'messages',             'original_message_id INTEGER')
         _safe_add_column(c, 'user_profiles',        'avatar_url TEXT')
         _safe_add_column(c, 'user_profiles',        'storage_quota_mb INTEGER')  # NULL = use global default
         _safe_add_column(c, 'friends',              'initiated_by INTEGER')
+        _safe_add_column(c, 'conversations',        'avatar_url TEXT')
+        _safe_add_column(c, 'conversations',        "announcement TEXT NOT NULL DEFAULT ''")
 
         # ── Data migrations (run once per version) ──────────────────────────
         db_version = c.execute(
@@ -189,6 +225,13 @@ def _init_db_locked():
         if ver < 3:
             c.execute("INSERT OR IGNORE INTO system_settings (key, value) VALUES ('default_storage_quota_mb', '10240')")
             c.execute("UPDATE system_settings SET value = '3' WHERE key = 'db_version'")
+
+        if ver < 4:
+            c.execute("UPDATE system_settings SET value = '4' WHERE key = 'db_version'")
+
+        if ver < 5:
+            c.execute("UPDATE conversations SET announcement = '' WHERE announcement IS NULL")
+            c.execute("UPDATE system_settings SET value = '5' WHERE key = 'db_version'")
 
         conn.commit()
     _db_initialized = True
@@ -237,18 +280,77 @@ def is_user_banned(user_id):
 
 
 def search_users(query, exclude_id=None):
+    escaped_query = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    like_query = f'%{escaped_query}%'
     with db_conn() as conn:
         if exclude_id:
             users = conn.execute(
-                'SELECT id, username FROM users WHERE username LIKE ? AND id != ? LIMIT 20',
-                (f'%{query}%', exclude_id)
+                'SELECT id, username FROM users WHERE username LIKE ? ESCAPE "\\" AND id != ? LIMIT 20',
+                (like_query, exclude_id)
             ).fetchall()
         else:
             users = conn.execute(
-                'SELECT id, username FROM users WHERE username LIKE ? LIMIT 20',
-                (f'%{query}%',)
+                'SELECT id, username FROM users WHERE username LIKE ? ESCAPE "\\" LIMIT 20',
+                (like_query,)
             ).fetchall()
     return [dict(u) for u in users]
+
+
+def search_users_for_viewer(viewer_id, query):
+    escaped_query = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    like_query = f'%{escaped_query}%'
+    with db_conn() as conn:
+        users = conn.execute(
+            '''SELECT u.id, u.username, p.avatar_url, p.avatar_emoji
+               FROM users u
+               LEFT JOIN user_profiles p ON p.user_id = u.id
+               WHERE u.username LIKE ? ESCAPE "\\"
+               ORDER BY CASE WHEN u.id = ? THEN 0 ELSE 1 END, u.username
+               LIMIT 20''',
+            (like_query, viewer_id)
+        ).fetchall()
+    result = []
+    for u in users:
+        uid = u['id']
+        relation = 'none'
+        can_chat = False
+        if uid == viewer_id:
+            relation = 'self'
+            can_chat = True
+        else:
+            norm_a, norm_b = _norm_pair(viewer_id, uid)
+            with db_conn() as conn:
+                rel = conn.execute(
+                    'SELECT status, initiated_by FROM friends WHERE requester_id = ? AND addressee_id = ?',
+                    (norm_a, norm_b)
+                ).fetchone()
+            if rel:
+                if rel['status'] == 'accepted':
+                    relation = 'friend'
+                    can_chat = True
+                elif rel['status'] == 'pending':
+                    relation = 'pending_out' if rel['initiated_by'] == viewer_id else 'pending_in'
+        result.append({
+            'id': uid,
+            'username': u['username'],
+            'avatar_url': u['avatar_url'],
+            'avatar_emoji': u['avatar_emoji'],
+            'relation': relation,
+            'can_chat': can_chat
+        })
+    return result
+
+
+def can_start_private_chat(user1_id, user2_id):
+    if user1_id == user2_id:
+        return True
+    norm_a, norm_b = _norm_pair(user1_id, user2_id)
+    with db_conn() as conn:
+        rel = conn.execute(
+            'SELECT status FROM friends WHERE requester_id = ? AND addressee_id = ?',
+            (norm_a, norm_b)
+        ).fetchone()
+    return bool(rel and rel['status'] == 'accepted')
 
 
 def create_self_conversation(user_id):
@@ -339,7 +441,7 @@ def create_group_conversation(name, creator_id, member_ids):
 def get_user_conversations(user_id):
     with db_conn() as conn:
         convs = conn.execute(
-            '''SELECT c.id, c.name, c.is_group, c.is_self_chat, c.created_at
+            '''SELECT c.id, c.name, c.is_group, c.is_self_chat, c.avatar_url, c.announcement, c.created_at
                FROM conversations c
                JOIN conversation_members cm ON c.id = cm.conversation_id
                WHERE cm.user_id = ?
@@ -350,8 +452,9 @@ def get_user_conversations(user_id):
         for conv in convs:
             conv_dict = dict(conv)
             members = conn.execute(
-                '''SELECT u.id, u.username FROM users u
+                     '''SELECT u.id, u.username, p.avatar_url, p.avatar_emoji FROM users u
                    JOIN conversation_members cm ON u.id = cm.user_id
+                         LEFT JOIN user_profiles p ON p.user_id = u.id
                    WHERE cm.conversation_id = ?''',
                 (conv['id'],)
             ).fetchall()
@@ -364,7 +467,7 @@ def get_user_conversations(user_id):
             else:
                 conv_dict['display_name'] = conv_dict['name'] or '群聊'
             last_msg = conn.execute(
-                '''SELECT m.content, m.msg_type, m.timestamp, u.username as sender_name
+                '''SELECT m.id, m.content, m.msg_type, m.timestamp, m.is_revoked, u.username as sender_name
                    FROM messages m JOIN users u ON m.sender_id = u.id
                    WHERE m.conversation_id = ?
                    ORDER BY m.timestamp DESC LIMIT 1''',
@@ -379,43 +482,164 @@ def get_user_conversations(user_id):
     return result
 
 
-def save_message(conversation_id, sender_id, content, msg_type='text', media_url=None):
+def save_message(conversation_id, sender_id, content, msg_type='text', media_url=None, original_message_id=None):
     with db_conn() as conn:
         now = time.time()
         c = conn.cursor()
         c.execute(
-            'INSERT INTO messages (conversation_id, sender_id, content, msg_type, media_url, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-            (conversation_id, sender_id, content, msg_type, media_url, now)
+            '''INSERT INTO messages
+               (conversation_id, sender_id, content, msg_type, media_url, original_message_id, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?)''',
+            (conversation_id, sender_id, content, msg_type, media_url, original_message_id, now)
         )
         msg_id = c.lastrowid
         conn.commit()
     return {
         'id': msg_id, 'conversation_id': conversation_id, 'sender_id': sender_id,
-        'content': content, 'msg_type': msg_type, 'media_url': media_url, 'timestamp': now
+        'content': content, 'msg_type': msg_type, 'media_url': media_url,
+        'is_revoked': 0, 'edited_at': None, 'original_message_id': original_message_id,
+        'timestamp': now
     }
 
 
 def get_messages(conversation_id, limit=50, before=None):
     with db_conn() as conn:
+        base_query = '''
+            SELECT m.id, m.conversation_id, m.sender_id, m.content,
+                   m.msg_type, m.media_url, m.is_revoked, m.edited_at,
+                   m.original_message_id, m.timestamp, u.username as sender_name,
+                   om.content AS original_content, ou.username AS original_sender_name,
+                   om.msg_type AS original_msg_type
+            FROM messages m
+            JOIN users u ON m.sender_id = u.id
+            LEFT JOIN messages om ON m.original_message_id = om.id
+            LEFT JOIN users ou ON om.sender_id = ou.id
+            WHERE m.conversation_id = ?
+        '''
         if before:
             msgs = conn.execute(
-                '''SELECT m.id, m.conversation_id, m.sender_id, m.content,
-                          m.msg_type, m.media_url, m.timestamp, u.username as sender_name
-                   FROM messages m JOIN users u ON m.sender_id = u.id
-                   WHERE m.conversation_id = ? AND m.timestamp < ?
-                   ORDER BY m.timestamp DESC LIMIT ?''',
+                base_query + ' AND m.timestamp < ? ORDER BY m.timestamp DESC LIMIT ?',
                 (conversation_id, before, limit)
             ).fetchall()
         else:
             msgs = conn.execute(
-                '''SELECT m.id, m.conversation_id, m.sender_id, m.content,
-                          m.msg_type, m.media_url, m.timestamp, u.username as sender_name
-                   FROM messages m JOIN users u ON m.sender_id = u.id
-                   WHERE m.conversation_id = ?
-                   ORDER BY m.timestamp DESC LIMIT ?''',
+                base_query + ' ORDER BY m.timestamp DESC LIMIT ?',
                 (conversation_id, limit)
             ).fetchall()
     return [dict(m) for m in reversed(msgs)]
+
+
+def get_message_by_id(message_id):
+    with db_conn() as conn:
+        msg = conn.execute(
+            '''SELECT m.id, m.conversation_id, m.sender_id, m.content, m.msg_type,
+                      m.media_url, m.is_revoked, m.edited_at, m.original_message_id, m.timestamp,
+                      u.username as sender_name
+               FROM messages m JOIN users u ON m.sender_id = u.id
+               WHERE m.id = ?''',
+            (message_id,)
+        ).fetchone()
+    return dict(msg) if msg else None
+
+
+def revoke_message(message_id, user_id):
+    with db_conn() as conn:
+        msg = conn.execute(
+            'SELECT id, sender_id, is_revoked FROM messages WHERE id = ?',
+            (message_id,)
+        ).fetchone()
+        if not msg:
+            return False, '消息不存在'
+        if msg['sender_id'] != user_id:
+            return False, '只能撤回自己的消息'
+        if msg['is_revoked']:
+            return False, '消息已撤回'
+        conn.execute(
+            "UPDATE messages SET is_revoked = 1, content = '消息已撤回', media_url = NULL WHERE id = ?",
+            (message_id,)
+        )
+        conn.execute('DELETE FROM favorite_messages WHERE message_id = ?', (message_id,))
+        conn.commit()
+    return True, '已撤回'
+
+
+def edit_message(message_id, user_id, content):
+    with db_conn() as conn:
+        msg = conn.execute(
+            'SELECT id, sender_id, is_revoked, msg_type FROM messages WHERE id = ?',
+            (message_id,)
+        ).fetchone()
+        if not msg:
+            return False, '消息不存在'
+        if msg['sender_id'] != user_id:
+            return False, '只能编辑自己的消息'
+        if msg['is_revoked']:
+            return False, '消息已撤回'
+        if msg['msg_type'] != 'text':
+            return False, '仅文本消息可编辑'
+        conn.execute(
+            'UPDATE messages SET content = ?, edited_at = ? WHERE id = ?',
+            (content, time.time(), message_id)
+        )
+        conn.commit()
+    return True, '已编辑'
+
+
+def toggle_favorite_message(user_id, message_id):
+    with db_conn() as conn:
+        msg = conn.execute(
+            'SELECT is_revoked FROM messages WHERE id = ?',
+            (message_id,)
+        ).fetchone()
+        if not msg or msg['is_revoked']:
+            return False, False
+        conn.execute('BEGIN IMMEDIATE')
+        deleted = conn.execute(
+            'DELETE FROM favorite_messages WHERE user_id = ? AND message_id = ?',
+            (user_id, message_id)
+        ).rowcount
+        if deleted:
+            conn.commit()
+            return True, False
+        conn.execute(
+            'INSERT OR IGNORE INTO favorite_messages (user_id, message_id, created_at) VALUES (?, ?, ?)',
+            (user_id, message_id, time.time())
+        )
+        conn.commit()
+        return True, True
+
+
+def get_favorite_messages(user_id, limit=30, before=None):
+    safe_limit = max(1, min(int(limit), 100))
+    with db_conn() as conn:
+        params = [user_id]
+        where_clause = 'WHERE fm.user_id = ?'
+        if before is not None:
+            where_clause += ' AND fm.created_at < ?'
+            params.append(float(before))
+        params.append(safe_limit + 1)
+        rows = conn.execute(
+            f'''SELECT m.id, m.conversation_id, m.sender_id, m.content, m.msg_type,
+                      m.media_url, m.is_revoked, m.edited_at, m.original_message_id, m.timestamp,
+                      u.username as sender_name, fm.created_at as favorited_at,
+                      c.name as conversation_name, c.is_group, c.is_self_chat
+               FROM favorite_messages fm
+               JOIN messages m ON fm.message_id = m.id
+               JOIN users u ON m.sender_id = u.id
+               JOIN conversations c ON c.id = m.conversation_id
+               {where_clause}
+               ORDER BY fm.created_at DESC
+               LIMIT ?''',
+            tuple(params)
+        ).fetchall()
+    items = [dict(r) for r in rows[:safe_limit]]
+    has_more = len(rows) > safe_limit
+    next_before = items[-1]['favorited_at'] if has_more and items else None
+    return {
+        'items': items,
+        'has_more': has_more,
+        'next_before': next_before
+    }
 
 
 def get_conversation_members(conversation_id):
@@ -708,12 +932,13 @@ def _norm_pair(a, b):
 def get_friends(user_id):
     with db_conn() as conn:
         friends = conn.execute(
-            '''SELECT u.id, u.username
+            '''SELECT u.id, u.username, p.avatar_url, p.avatar_emoji
                FROM friends f
                JOIN users u ON u.id = CASE
                    WHEN f.requester_id = ? THEN f.addressee_id
                    ELSE f.requester_id
                END
+               LEFT JOIN user_profiles p ON p.user_id = u.id
                WHERE (f.requester_id = ? OR f.addressee_id = ?) AND f.status = 'accepted'
                ORDER BY u.username''',
             (user_id, user_id, user_id)
@@ -725,9 +950,10 @@ def get_friend_requests(user_id):
     """Pending requests where this user is the recipient (initiated_by != user_id)."""
     with db_conn() as conn:
         requests = conn.execute(
-            '''SELECT f.id, u.id as user_id, u.username, f.created_at
+                '''SELECT f.id, u.id as user_id, u.username, p.avatar_url, p.avatar_emoji, f.created_at
                FROM friends f
                JOIN users u ON f.initiated_by = u.id
+                    LEFT JOIN user_profiles p ON p.user_id = u.id
                WHERE (f.requester_id = ? OR f.addressee_id = ?)
                  AND f.initiated_by != ?
                  AND f.status = 'pending'
@@ -827,6 +1053,36 @@ def remove_friend(user_id, friend_id):
     return True, '已删除好友'
 
 
+def get_friend_review(user_id):
+    with db_conn() as conn:
+        incoming = conn.execute(
+                '''SELECT f.id, f.created_at, u.id AS user_id, u.username, p.avatar_url, p.avatar_emoji
+               FROM friends f
+               JOIN users u ON u.id = f.initiated_by
+                    LEFT JOIN user_profiles p ON p.user_id = u.id
+               WHERE (f.requester_id = ? OR f.addressee_id = ?)
+                 AND f.initiated_by != ?
+                 AND f.status = 'pending'
+               ORDER BY f.created_at DESC''',
+            (user_id, user_id, user_id)
+        ).fetchall()
+        outgoing = conn.execute(
+                '''SELECT f.id, f.created_at, u.id AS user_id, u.username, p.avatar_url, p.avatar_emoji
+               FROM friends f
+               JOIN users u ON u.id = CASE WHEN f.requester_id = ? THEN f.addressee_id ELSE f.requester_id END
+                    LEFT JOIN user_profiles p ON p.user_id = u.id
+               WHERE (f.requester_id = ? OR f.addressee_id = ?)
+                 AND f.initiated_by = ?
+                 AND f.status = 'pending'
+               ORDER BY f.created_at DESC''',
+            (user_id, user_id, user_id, user_id)
+        ).fetchall()
+    return {
+        'incoming': [dict(r) for r in incoming],
+        'outgoing': [dict(r) for r in outgoing]
+    }
+
+
 # ===== Group Settings =====
 
 def get_group_settings(conv_id, user_id):
@@ -837,8 +1093,9 @@ def get_group_settings(conv_id, user_id):
         if not conv:
             return None
         members = conn.execute(
-            '''SELECT u.id, u.username, cm.role, cm.joined_at
+                '''SELECT u.id, u.username, p.avatar_url, p.avatar_emoji, cm.role, cm.joined_at
                FROM users u JOIN conversation_members cm ON u.id = cm.user_id
+                    LEFT JOIN user_profiles p ON p.user_id = u.id
                WHERE cm.conversation_id = ?
                ORDER BY CASE cm.role WHEN 'admin' THEN 0 ELSE 1 END, u.username''',
             (conv_id,)
@@ -853,10 +1110,122 @@ def get_group_settings(conv_id, user_id):
     return {
         'id': conv['id'],
         'name': conv['name'],
+        'avatar_url': conv['avatar_url'],
+        'announcement': conv['announcement'] or '',
         'created_by': conv['created_by'],
         'members': [dict(m) for m in members],
         'my_role': my_role,
     }
+
+
+def update_group_announcement(conv_id, user_id, announcement):
+    with db_conn() as conn:
+        conv = conn.execute(
+            'SELECT created_by FROM conversations WHERE id = ? AND is_group = 1', (conv_id,)
+        ).fetchone()
+        if not conv:
+            return False, '群聊不存在'
+        role = conn.execute(
+            'SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?',
+            (conv_id, user_id)
+        ).fetchone()
+        if not (role and role['role'] == 'admin') and conv['created_by'] != user_id:
+            return False, '需要管理员权限'
+        conn.execute(
+            'UPDATE conversations SET announcement = ? WHERE id = ? AND is_group = 1',
+            (announcement.strip(), conv_id)
+        )
+        conn.commit()
+    return True, '群公告已更新'
+
+
+def update_group_avatar(conv_id, user_id, avatar_url):
+    with db_conn() as conn:
+        conv = conn.execute(
+            'SELECT created_by FROM conversations WHERE id = ? AND is_group = 1', (conv_id,)
+        ).fetchone()
+        if not conv:
+            return False, '群聊不存在'
+        role = conn.execute(
+            'SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?',
+            (conv_id, user_id)
+        ).fetchone()
+        if not (role and role['role'] == 'admin') and conv['created_by'] != user_id:
+            return False, '需要管理员权限'
+        conn.execute(
+            'UPDATE conversations SET avatar_url = ? WHERE id = ? AND is_group = 1',
+            (avatar_url, conv_id)
+        )
+        conn.commit()
+    return True, '群头像已更新'
+
+
+def pin_message(conv_id, message_id, user_id):
+    with db_conn() as conn:
+        conv = conn.execute('SELECT is_group FROM conversations WHERE id = ?', (conv_id,)).fetchone()
+        if not conv:
+            return False, '会话不存在'
+        if not is_member(conv_id, user_id):
+            return False, '无权限'
+        msg = conn.execute(
+            'SELECT id FROM messages WHERE id = ? AND conversation_id = ? AND is_revoked = 0',
+            (message_id, conv_id)
+        ).fetchone()
+        if not msg:
+            return False, '消息不存在或不可置顶'
+        if conv['is_group']:
+            role = conn.execute(
+                'SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?',
+                (conv_id, user_id)
+            ).fetchone()
+            creator = conn.execute('SELECT created_by FROM conversations WHERE id = ?', (conv_id,)).fetchone()
+            if not (role and role['role'] == 'admin') and (not creator or creator['created_by'] != user_id):
+                return False, '仅群管理员可置顶'
+        conn.execute(
+            '''INSERT OR IGNORE INTO pinned_messages (conversation_id, message_id, pinned_by, pinned_at)
+               VALUES (?, ?, ?, ?)''',
+            (conv_id, message_id, user_id, time.time())
+        )
+        conn.commit()
+    return True, '已置顶'
+
+
+def unpin_message(conv_id, message_id, user_id):
+    with db_conn() as conn:
+        if not is_member(conv_id, user_id):
+            return False, '无权限'
+        conv = conn.execute('SELECT is_group, created_by FROM conversations WHERE id = ?', (conv_id,)).fetchone()
+        if not conv:
+            return False, '会话不存在'
+        if conv['is_group']:
+            role = conn.execute(
+                'SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ?',
+                (conv_id, user_id)
+            ).fetchone()
+            if not (role and role['role'] == 'admin') and conv['created_by'] != user_id:
+                return False, '仅群管理员可取消置顶'
+        conn.execute(
+            'DELETE FROM pinned_messages WHERE conversation_id = ? AND message_id = ?',
+            (conv_id, message_id)
+        )
+        conn.commit()
+    return True, '已取消置顶'
+
+
+def get_pinned_messages(conv_id):
+    with db_conn() as conn:
+        rows = conn.execute(
+            '''SELECT pm.message_id, pm.pinned_by, pm.pinned_at,
+                      m.content, m.msg_type, m.media_url, m.timestamp,
+                      u.username AS pinned_by_name
+               FROM pinned_messages pm
+               JOIN messages m ON m.id = pm.message_id
+               JOIN users u ON u.id = pm.pinned_by
+               WHERE pm.conversation_id = ?
+               ORDER BY pm.pinned_at DESC''',
+            (conv_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def update_group_name(conv_id, user_id, new_name):

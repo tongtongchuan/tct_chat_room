@@ -3,3 +3,5 @@ flask-socketio
 argon2-cffi
 gevent
 gevent-websocket
+flask-limiter
+flask-wtf

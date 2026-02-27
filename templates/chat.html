@@ -11,10 +11,15 @@
     <div id="toastContainer"></div>
 
     <div class="app">
+        <aside class="left-rail">
+            <button class="rail-btn active" id="nav-messages" title="消息" onclick="switchSidebarTab('chats')"><i data-lucide="message-circle"></i></button>
+            <button class="rail-btn" id="nav-contacts" title="通讯录" onclick="switchSidebarTab('contacts')"><i data-lucide="users"></i></button>
+            <button class="rail-btn" id="nav-favorites" title="收藏" onclick="switchSidebarTab('favorites')"><i data-lucide="star"></i></button>
+        </aside>
         <!-- Drag-drop overlay -->
         <div id="dropOverlay" class="drop-overlay" style="display:none">
             <div class="drop-content">
-                <div style="font-size:48px">📎</div>
+                <div style="font-size:48px"><i data-lucide="paperclip"></i></div>
                 <div style="font-size:18px;margin-top:8px">松开以发送文件</div>
             </div>
         </div>
@@ -26,25 +31,16 @@
                     <span class="username" id="myName"></span>
                 </div>
                 <div class="header-actions">
-                    <button class="icon-btn" title="消息通知" id="toggleNotif" onclick="toggleNotifications()">🔔</button>
-                    <button class="icon-btn" title="设置" onclick="openSettings('profile')">⚙️</button>
-                    <button class="icon-btn" title="退出" onclick="doLogout()">↩</button>
+                    <button class="icon-btn" title="消息通知" id="toggleNotif" onclick="toggleNotifications()"><i data-lucide="bell"></i></button>
+                    <button class="icon-btn" title="设置" onclick="openSettings('profile')"><i data-lucide="settings"></i></button>
+                    <button class="icon-btn" title="退出" onclick="doLogout()"><i data-lucide="log-out"></i></button>
                 </div>
-            </div>
-
-            <!-- Sidebar Tabs -->
-            <div class="sidebar-tabs">
-                <button class="sidebar-tab active" id="tab-chats" onclick="switchSidebarTab('chats')">💬 消息</button>
-                <button class="sidebar-tab" id="tab-contacts" onclick="switchSidebarTab('contacts')">
-                    👥 通讯录
-                    <span class="badge" id="contactsBadge" style="display:none"></span>
-                </button>
             </div>
 
             <!-- Chats Panel -->
             <div id="panel-chats" style="flex:1; display:flex; flex-direction:column; overflow:hidden; min-height:0;">
                 <div class="sidebar-actions">
-                    <button class="action-btn" onclick="openSelfChat()" title="我的备忘录">📝 备忘录</button>
+                    <button class="action-btn" onclick="openSelfChat()" title="我的备忘录"><i data-lucide="notebook-pen"></i>备忘录</button>
                     <button class="action-btn" onclick="showModal('newChat')">新对话</button>
                     <button class="action-btn" onclick="showModal('newGroup')">创建群聊</button>
                 </div>
@@ -57,11 +53,12 @@
             <div id="panel-contacts" style="display:none; flex:1; overflow:hidden; display:none; flex-direction:column">
                 <div class="sidebar-actions">
                     <button class="action-btn" onclick="showModal('addFriend')">添加好友</button>
+                    <button class="action-btn" onclick="showModal('friendReview')">好友审核</button>
                 </div>
                 <!-- Friend Requests -->
                 <div id="friendRequestsSection" style="display:none">
                     <div class="contacts-section-title" onclick="toggleFriendRequests()">
-                        🔔 新的朋友
+                        新的朋友
                         <span class="badge" id="reqBadge"></span>
                         <span id="reqChevron" style="margin-left:auto">▼</span>
                     </div>
@@ -73,38 +70,71 @@
                     <div class="empty-hint">暂无好友，点击上方添加</div>
                 </div>
             </div>
+
+            <!-- Favorites Panel -->
+            <div id="panel-favorites" style="display:none; flex:1; overflow:hidden; flex-direction:column">
+                <div class="sidebar-actions">
+                    <button class="action-btn" onclick="loadFavorites()">刷新收藏</button>
+                </div>
+                <div class="conv-list" id="favoritesList">
+                    <div class="empty-hint">暂无收藏消息</div>
+                </div>
+                <button class="load-more" id="favoritesLoadMoreBtn" onclick="loadFavoritesMore()" style="display:none; margin:8px 10px 10px;">加载更多收藏</button>
+            </div>
         </aside>
 
         <!-- Chat area -->
         <main class="chat-area">
             <div class="chat-placeholder" id="chatPlaceholder">
-                <div class="placeholder-icon">💬</div>
+                <div class="placeholder-icon"><i data-lucide="message-square"></i></div>
                 <p>选择一个会话开始聊天</p>
             </div>
             <div class="chat-container" id="chatContainer" style="display:none">
                 <div class="chat-header">
+                    <span class="chat-title-avatar" id="chatTitleAvatar"></span>
                     <span class="chat-title" id="chatTitle"></span>
                     <span class="chat-members" id="chatMembers"></span>
                     <div style="margin-left:auto; display:flex; gap:4px">
+                        <button class="icon-btn" id="multiSelectBtn" title="多选转发" onclick="toggleSelectionMode()"><i data-lucide="check-square"></i></button>
+                        <button class="icon-btn" id="forwardSelectedBtn" title="转发选中" onclick="forwardSelectedMessages()" style="display:none"><i data-lucide="forward"></i></button>
                         <button class="icon-btn" id="groupSettingsBtn" title="群聊设置"
-                                onclick="openGroupSettings()" style="display:none">⚙️</button>
+                                onclick="openGroupSettings()" style="display:none"><i data-lucide="sliders-horizontal"></i></button>
                     </div>
                 </div>
+                <div class="group-announcement" id="groupAnnouncement" style="display:none"></div>
+                <div class="pinned-strip" id="pinnedStrip" style="display:none"></div>
                 <div class="messages" id="messages">
                     <button class="load-more" id="loadMoreBtn" onclick="loadMore()" style="display:none">加载更多</button>
                 </div>
                 <div class="input-area">
+                    <div id="replyContainer" class="reply-container" style="display:none">
+                        <div class="reply-info">
+                            <i data-lucide="reply" class="reply-icon"></i>
+                            <div class="reply-content">
+                                <div id="replyToUser" class="reply-user"></div>
+                                <div id="replyToText" class="reply-text"></div>
+                            </div>
+                        </div>
+                        <button class="icon-btn" onclick="cancelReply()"><i data-lucide="x"></i></button>
+                    </div>
                     <div class="input-toolbar">
-                        <button class="toolbar-btn" title="发送图片/文件" onclick="document.getElementById('fileInput').click()">📎</button>
+                        <button class="toolbar-btn" title="发送图片/文件" onclick="document.getElementById('fileInput').click()"><i data-lucide="paperclip"></i></button>
                         <input type="file" id="fileInput" style="display:none"
                                accept="image/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar,.7z,.md"
                                onchange="handleFileSelect(this)">
-                        <button class="toolbar-btn" id="recordBtn" title="录音" onclick="toggleRecording()">🎤</button>
-                        <button class="toolbar-btn" id="speechBtn" title="语音识别" onclick="toggleSpeech()">🗣️</button>
+                        <button class="toolbar-btn" id="recordBtn" title="录音模式" onclick="toggleRecordMode()"><i data-lucide="mic"></i></button>
+                        <button class="toolbar-btn" id="speechBtn" title="语音识别" onclick="toggleSpeech()"><i data-lucide="audio-lines"></i></button>
                     </div>
-                    <textarea id="msgInput" placeholder="输入消息… (Enter 发送, Shift+Enter 换行)"
-                              onkeydown="handleKey(event)"></textarea>
-                    <button class="send-btn" onclick="sendMessage()">发送</button>
+                    <div class="input-row">
+                        <textarea id="msgInput" placeholder="输入消息… (Enter 发送, Shift+Enter 换行)" onkeydown="handleKey(event)"></textarea>
+                        <button class="hold-record-btn" id="holdRecordBtn" style="display:none"
+                                onmousedown="startHoldRecord(event)" onmouseup="stopHoldRecord(event)"
+                                onmouseleave="cancelHoldRecord(event)" ontouchstart="startHoldRecord(event)"
+                                ontouchend="stopHoldRecord(event)" ontouchcancel="cancelHoldRecord(event)">
+                            按住录音
+                        </button>
+                        <button class="send-btn" onclick="sendMessage()">发送</button>
+                    </div>
                 </div>
             </div>
         </main>
@@ -113,11 +143,13 @@
         <aside class="group-settings-panel" id="groupSettingsPanel" style="display:none">
             <div class="gsp-header">
                 <span>群聊设置</span>
-                <button class="icon-btn" onclick="closeGroupSettings()">✕</button>
+                <button class="icon-btn" onclick="closeGroupSettings()"><i data-lucide="x"></i></button>
             </div>
             <div class="gsp-body" id="gspBody"></div>
         </aside>
     </div>
+
+    <div class="context-menu" id="contextMenu" style="display:none"></div>
 
     <!-- New Chat Modal -->
     <div class="modal-overlay" id="modal-newChat" onclick="hideModal(event, 'newChat')">
@@ -160,14 +192,14 @@
                     <span class="avatar" id="settingsAvatar" style="width:48px;height:48px;font-size:20px"></span>
                     <span id="settingsUsername"></span>
                 </div>
-                <button class="settings-nav-item active" id="snav-profile" onclick="switchSettingsTab('profile')">👤 个人资料</button>
-                <button class="settings-nav-item" id="snav-security" onclick="switchSettingsTab('security')">🔒 账号安全</button>
-                <button class="settings-nav-item" id="snav-appearance" onclick="switchSettingsTab('appearance')">🎨 个性化</button>
-                <button class="settings-nav-item" id="snav-notification" onclick="switchSettingsTab('notification')">🔔 通知设置</button>
-                <button class="settings-nav-item" id="snav-storage" onclick="switchSettingsTab('storage')">☁️ 云存储</button>
+                <button class="settings-nav-item active" id="snav-profile" onclick="switchSettingsTab('profile')"><i data-lucide="user-round"></i>个人资料</button>
+                <button class="settings-nav-item" id="snav-security" onclick="switchSettingsTab('security')"><i data-lucide="shield-check"></i>账号安全</button>
+                <button class="settings-nav-item" id="snav-appearance" onclick="switchSettingsTab('appearance')"><i data-lucide="palette"></i>个性化</button>
+                <button class="settings-nav-item" id="snav-notification" onclick="switchSettingsTab('notification')"><i data-lucide="bell-ring"></i>通知设置</button>
+                <button class="settings-nav-item" id="snav-storage" onclick="switchSettingsTab('storage')"><i data-lucide="hard-drive"></i>云存储</button>
             </div>
             <div class="settings-content">
-                <button class="icon-btn" style="position:absolute;top:14px;right:14px" onclick="closeSettings()">✕</button>
+                <button class="icon-btn" style="position:absolute;top:14px;right:14px" onclick="closeSettings()"><i data-lucide="x"></i></button>
 
                 <!-- Profile Tab -->
                 <div class="settings-tab" id="stab-profile">
@@ -179,7 +211,7 @@
                             <div>
                                 <div style="font-size:12px;color:var(--text-3);margin-bottom:6px">上传自定义头像（最大5MB）</div>
                                 <label class="avatar-upload-btn">
-                                    📷 选择图片
+                                    选择图片
                                     <input type="file" id="avatarFileInput" accept="image/*"
                                            style="display:none" onchange="uploadAvatar(this)">
                                 </label>
@@ -302,6 +334,18 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="modal-friendReview" onclick="hideModal(event, 'friendReview')">
+        <div class="modal" onclick="event.stopPropagation()">
+            <h3>好友审核</h3>
+            <div class="contacts-section-title">收到的申请</div>
+            <div class="search-results" id="friendReviewIncoming"></div>
+            <div class="contacts-section-title" style="margin-top:12px">我发出的申请</div>
+            <div class="search-results" id="friendReviewOutgoing"></div>
+            <button class="modal-close" onclick="hideModal(null, 'friendReview')">关闭</button>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdn.socket.io/4.7.4/socket.io.min.js" integrity="sha256-rVL8VAaAlF/nVJwPGxEmtUAp3X6yX4zisHmmJCyAcBE=" crossorigin="anonymous"></script>
     <script src="/static/js/chat.js"></script>
 </body>

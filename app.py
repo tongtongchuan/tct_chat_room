@@ -1,38 +1,84 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from flask_socketio import SocketIO, emit, join_room
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import database as db
 import os
 import json
 import uuid
+import time
+import mimetypes
+
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('text/css', '.css')
+
 from werkzeug.utils import secure_filename
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24).hex())
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
+)
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
 
 DEBUG = False  # set True for development
+allowed_origins_env = os.environ.get('SOCKET_ALLOWED_ORIGINS', '')
+if allowed_origins_env.strip():
+    socket_allowed_origins = [o.strip() for o in allowed_origins_env.split(',') if o.strip()]
+else:
+    socket_allowed_origins = []
 
 if DEBUG:
-    socketio = SocketIO(app, cors_allowed_origins='*')
+    socketio = SocketIO(app, cors_allowed_origins=socket_allowed_origins or None)
 else:
-    socketio = SocketIO(app, cors_allowed_origins='*', async_mode='gevent')
+    socketio = SocketIO(app, cors_allowed_origins=socket_allowed_origins or None, async_mode='gevent')
 
 # user_id -> set of sid
 online_users = {}
+user_msg_timestamps = {}
 
 # ── Upload config ───────────────────────────────────────────────────────────
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
 ALLOWED_IMAGE  = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'ico', 'avif'}
 ALLOWED_AUDIO  = {'webm', 'ogg', 'mp3', 'wav', 'm4a', 'aac', 'flac', 'opus'}
 ALLOWED_VIDEO  = {'mp4', 'mkv', 'mov', 'avi', 'webm', 'flv', 'm4v'}
+ALLOWED_FILE   = {'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv', 'zip', 'rar', '7z', 'tar', 'gz'}
 MAX_UPLOAD_MB  = 100   # single-file limit raised; quota enforced per-user
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
 @app.before_request
 def before_req():
     db.init_db()
+    
+    # CSRF Protection for API
+    if request.method in ('POST', 'PUT', 'DELETE') and request.path.startswith('/api/'):
+        origin = request.headers.get('Origin')
+        referer = request.headers.get('Referer')
+        if origin:
+            if not origin.startswith(request.host_url.rstrip('/')):
+                return jsonify({'ok': False, 'msg': 'CSRF detected'}), 403
+        elif referer:
+            if not referer.startswith(request.host_url):
+                return jsonify({'ok': False, 'msg': 'CSRF detected'}), 403
+        else:
+            return jsonify({'ok': False, 'msg': 'CSRF detected: missing Origin/Referer'}), 403
+
     # Reject banned users on every request
     if 'user_id' in session and request.path.startswith('/api/') and request.path != '/api/logout':
         user = db.get_user_by_id(session['user_id'])
@@ -65,6 +111,7 @@ def chat():
 # ---------- Auth API ----------
 
 @app.route('/api/register', methods=['POST'])
+@limiter.limit("10 per minute")
 def register():
     data = request.json
     username = data.get('username', '').strip()
@@ -84,6 +131,7 @@ def register():
 
 
 @app.route('/api/login', methods=['POST'])
+@limiter.limit("20 per minute")
 def api_login():
     data = request.json
     username = data.get('username', '').strip()
@@ -126,8 +174,10 @@ def create_private():
     if 'user_id' not in session:
         return jsonify({'ok': False}), 401
     other_id = request.json.get('user_id')
-    if not other_id or other_id == session['user_id']:
+    if not other_id:
         return jsonify({'ok': False, 'msg': '无效用户'})
+    if other_id != session['user_id'] and not db.can_start_private_chat(session['user_id'], other_id):
+        return jsonify({'ok': False, 'msg': '仅可与好友发起私聊，请先发送好友申请并通过审核'}), 403
     conv_id = db.create_private_conversation(session['user_id'], other_id)
     return jsonify({'ok': True, 'conversation_id': conv_id})
 
@@ -171,6 +221,124 @@ def get_messages(conv_id):
     return jsonify({'ok': True, 'messages': msgs})
 
 
+@app.route('/api/messages/<int:message_id>/revoke', methods=['POST'])
+@limiter.limit("60 per minute")
+def revoke_message(message_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    msg = db.get_message_by_id(message_id)
+    if not msg:
+        return jsonify({'ok': False, 'msg': '消息不存在'}), 404
+    if not db.is_member(msg['conversation_id'], session['user_id']):
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    ok, msg_text = db.revoke_message(message_id, session['user_id'])
+    if not ok:
+        return jsonify({'ok': False, 'msg': msg_text}), 400
+    emit_payload = {
+        'message_id': message_id,
+        'conversation_id': msg['conversation_id'],
+        'sender_name': msg.get('sender_name')
+    }
+    socketio.emit('message_revoked', emit_payload, room=f'conv_{msg["conversation_id"]}')
+    return jsonify({'ok': True})
+
+
+@app.route('/api/messages/<int:message_id>/edit', methods=['PUT'])
+@limiter.limit("60 per minute")
+def edit_message(message_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    data = request.json or {}
+    content = (data.get('content') or '').strip()
+    if not content:
+        return jsonify({'ok': False, 'msg': '内容不能为空'}), 400
+    msg = db.get_message_by_id(message_id)
+    if not msg:
+        return jsonify({'ok': False, 'msg': '消息不存在'}), 404
+    if not db.is_member(msg['conversation_id'], session['user_id']):
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    settings = db.get_system_settings()
+    max_len = int(settings.get('max_message_length', '2000'))
+    if len(content) > max_len:
+        return jsonify({'ok': False, 'msg': '消息过长'}), 400
+    ok, msg_text = db.edit_message(message_id, session['user_id'], content)
+    if not ok:
+        return jsonify({'ok': False, 'msg': msg_text}), 400
+    updated = db.get_message_by_id(message_id)
+    socketio.emit('message_edited', updated, room=f'conv_{updated["conversation_id"]}')
+    return jsonify({'ok': True, 'message': updated})
+
+
+@app.route('/api/messages/<int:message_id>/forward', methods=['POST'])
+@limiter.limit("30 per minute")
+def forward_message(message_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    data = request.json or {}
+    conversation_ids = data.get('conversation_ids') or []
+    if not isinstance(conversation_ids, list) or not conversation_ids:
+        return jsonify({'ok': False, 'msg': '请选择目标会话'}), 400
+    if len(conversation_ids) > 20:
+        return jsonify({'ok': False, 'msg': '单次最多转发 20 个会话'}), 400
+    original = db.get_message_by_id(message_id)
+    if not original:
+        return jsonify({'ok': False, 'msg': '消息不存在'}), 404
+    if original.get('is_revoked'):
+        return jsonify({'ok': False, 'msg': '已撤回消息不可转发'}), 400
+    if not db.is_member(original['conversation_id'], session['user_id']):
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+
+    forwarded = 0
+    for conv_id in conversation_ids:
+        if not db.is_member(conv_id, session['user_id']):
+            continue
+        new_msg = db.save_message(
+            conv_id,
+            session['user_id'],
+            original['content'],
+            msg_type=original['msg_type'],
+            media_url=original['media_url'],
+            original_message_id=original['id']
+        )
+        new_msg['sender_name'] = session.get('username')
+        socketio.emit('new_message', new_msg, room=f'conv_{conv_id}')
+        forwarded += 1
+    return jsonify({'ok': True, 'forwarded': forwarded})
+
+
+@app.route('/api/messages/<int:message_id>/favorite', methods=['POST'])
+@limiter.limit("120 per minute")
+def toggle_favorite_message(message_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    msg = db.get_message_by_id(message_id)
+    if not msg:
+        return jsonify({'ok': False, 'msg': '消息不存在'}), 404
+    if not db.is_member(msg['conversation_id'], session['user_id']):
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    if msg.get('is_revoked'):
+        return jsonify({'ok': False, 'msg': '已撤回消息不可收藏'}), 400
+    ok, favorited = db.toggle_favorite_message(session['user_id'], message_id)
+    if not ok:
+        return jsonify({'ok': False, 'msg': '收藏操作失败'}), 400
+    return jsonify({'ok': ok, 'favorited': favorited})
+
+
+@app.route('/api/favorites')
+def get_favorites():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    before = request.args.get('before', type=float)
+    limit = request.args.get('limit', default=30, type=int)
+    result = db.get_favorite_messages(session['user_id'], limit=limit, before=before)
+    return jsonify({
+        'ok': True,
+        'messages': result['items'],
+        'has_more': result['has_more'],
+        'next_before': result['next_before']
+    })
+
+
 @app.route('/api/users/search')
 def search_users():
     if 'user_id' not in session:
@@ -178,7 +346,7 @@ def search_users():
     q = request.args.get('q', '').strip()
     if not q:
         return jsonify({'ok': True, 'users': []})
-    users = db.search_users(q, exclude_id=session['user_id'])
+    users = db.search_users_for_viewer(session['user_id'], q)
     return jsonify({'ok': True, 'users': users})
 
 
@@ -231,29 +399,36 @@ def _save_upload(file_storage, sub_dir):
         raise ValueError('Invalid sub_dir')
     folder = os.path.join(UPLOAD_FOLDER, sub_dir)
     os.makedirs(folder, exist_ok=True)
-    ext = file_storage.filename.rsplit('.', 1)[-1].lower() if '.' in file_storage.filename else 'bin'
+    safe_name = secure_filename(file_storage.filename)
+    ext = safe_name.rsplit('.', 1)[-1].lower() if '.' in safe_name else 'bin'
     filename = f'{uuid.uuid4().hex}.{ext}'
     file_storage.save(os.path.join(folder, filename))
     return f'/static/uploads/{sub_dir}/{filename}'
 
 
 @app.route('/api/upload/avatar', methods=['POST'])
+@limiter.limit("10 per minute")
 def upload_avatar():
     if 'user_id' not in session:
         return jsonify({'ok': False}), 401
     f = request.files.get('file')
     if not f:
         return jsonify({'ok': False, 'msg': '未选择文件'})
-    if not _allowed_ext(f.filename, ALLOWED_IMAGE):
+    safe_name = secure_filename(f.filename)
+    if not _allowed_ext(safe_name, ALLOWED_IMAGE):
         return jsonify({'ok': False, 'msg': '仅支持图片格式'})
     f.seek(0, 2)
-    size_mb = f.tell() / (1024 * 1024)
+    file_size = f.tell()
+    size_mb = file_size / (1024 * 1024)
     f.seek(0)
     if size_mb > 5:
         return jsonify({'ok': False, 'msg': '头像图片不超过 5 MB'})
+        
+    info = db.get_user_storage_info(session['user_id'])
+    if info['used_bytes'] + file_size > info['quota_bytes']:
+        return jsonify({'ok': False, 'msg': '云盘空间不足'})
+        
     url = _save_upload(f, 'avatars')
-    file_size = f.seek(0, 2)
-    f.seek(0)
     if not db.record_file_upload(session['user_id'], url, file_size if file_size else 0):
         saved_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), url.lstrip('/'))
         if os.path.exists(saved_path):
@@ -264,6 +439,7 @@ def upload_avatar():
 
 
 @app.route('/api/upload', methods=['POST'])
+@limiter.limit("30 per minute")
 def upload_file():
     """Upload media/file for chat messages. Enforces per-user storage quota."""
     if 'user_id' not in session:
@@ -278,15 +454,22 @@ def upload_file():
     if size_mb > MAX_UPLOAD_MB:
         return jsonify({'ok': False, 'msg': f'单文件不超过 {MAX_UPLOAD_MB} MB'})
 
-    ext = f.filename.rsplit('.', 1)[-1].lower() if '.' in f.filename else ''
+    info = db.get_user_storage_info(session['user_id'])
+    if info['used_bytes'] + file_size > info['quota_bytes']:
+        return jsonify({'ok': False, 'msg': '云盘空间不足'})
+
+    safe_name = secure_filename(f.filename)
+    ext = safe_name.rsplit('.', 1)[-1].lower() if '.' in safe_name else ''
     if ext in ALLOWED_IMAGE:
         msg_type, sub = 'image', 'images'
     elif ext in ALLOWED_AUDIO:
         msg_type, sub = 'audio', 'audio'
     elif ext in ALLOWED_VIDEO:
         msg_type, sub = 'video', 'video'
-    else:
+    elif ext in ALLOWED_FILE:
         msg_type, sub = 'file', 'files'
+    else:
+        return jsonify({'ok': False, 'msg': '不支持的文件类型'})
 
     url = _save_upload(f, sub)
     # Atomic quota check + record
@@ -297,7 +480,7 @@ def upload_file():
             os.remove(saved_path)
         return jsonify({'ok': False, 'msg': '云盘空间不足'})
     return jsonify({'ok': True, 'url': url, 'msg_type': msg_type,
-                    'filename': secure_filename(f.filename) or f'file.{ext}'})
+                    'filename': safe_name or f'file.{ext}'})
 
 
 @app.route('/api/settings/password', methods=['POST'])
@@ -343,6 +526,14 @@ def get_friend_requests():
         return jsonify({'ok': False}), 401
     requests = db.get_friend_requests(session['user_id'])
     return jsonify({'ok': True, 'requests': requests})
+
+
+@app.route('/api/contacts/review')
+def get_friend_review():
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    review = db.get_friend_review(session['user_id'])
+    return jsonify({'ok': True, **review})
 
 
 @app.route('/api/contacts/request', methods=['POST'])
@@ -391,6 +582,36 @@ def remove_friend(friend_id):
     return jsonify({'ok': ok, 'msg': msg})
 
 
+@app.route('/api/conversations/<int:conv_id>/pinned')
+def get_pinned(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    if not db.is_member(conv_id, session['user_id']):
+        return jsonify({'ok': False, 'msg': '无权限'}), 403
+    items = db.get_pinned_messages(conv_id)
+    return jsonify({'ok': True, 'items': items})
+
+
+@app.route('/api/conversations/<int:conv_id>/pinned/<int:message_id>', methods=['POST'])
+def pin_message(conv_id, message_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.pin_message(conv_id, message_id, session['user_id'])
+    if ok:
+        socketio.emit('pinned_updated', {'conversation_id': conv_id}, room=f'conv_{conv_id}')
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/pinned/<int:message_id>', methods=['DELETE'])
+def unpin_message(conv_id, message_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    ok, msg = db.unpin_message(conv_id, message_id, session['user_id'])
+    if ok:
+        socketio.emit('pinned_updated', {'conversation_id': conv_id}, room=f'conv_{conv_id}')
+    return jsonify({'ok': ok, 'msg': msg})
+
+
 # ---------- Group Settings API ----------
 
 @app.route('/api/conversations/<int:conv_id>/settings')
@@ -416,6 +637,41 @@ def update_group_name(conv_id):
     if ok:
         socketio.emit('group_updated', {'conversation_id': conv_id, 'name': new_name},
                       room=f'conv_{conv_id}')
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/announcement', methods=['PUT'])
+def update_group_announcement(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    announcement = ((request.json or {}).get('announcement') or '').strip()
+    if len(announcement) > 200:
+        return jsonify({'ok': False, 'msg': '群公告最多 200 字'}), 400
+    ok, msg = db.update_group_announcement(conv_id, session['user_id'], announcement)
+    if ok:
+        socketio.emit('group_updated', {
+            'conversation_id': conv_id,
+            'announcement': announcement
+        }, room=f'conv_{conv_id}')
+    return jsonify({'ok': ok, 'msg': msg})
+
+
+@app.route('/api/conversations/<int:conv_id>/avatar', methods=['PUT'])
+def update_group_avatar(conv_id):
+    if 'user_id' not in session:
+        return jsonify({'ok': False}), 401
+    avatar_url = ((request.json or {}).get('avatar_url') or '').strip()
+    if avatar_url:
+        if not avatar_url.startswith('/static/uploads/') or '..' in avatar_url:
+            return jsonify({'ok': False, 'msg': '无效头像地址'}), 400
+        if not db.verify_file_owner(session['user_id'], avatar_url):
+            return jsonify({'ok': False, 'msg': '无效头像地址'}), 400
+    ok, msg = db.update_group_avatar(conv_id, session['user_id'], avatar_url or None)
+    if ok:
+        socketio.emit('group_updated', {
+            'conversation_id': conv_id,
+            'avatar_url': avatar_url or None
+        }, room=f'conv_{conv_id}')
     return jsonify({'ok': ok, 'msg': msg})
 
 
@@ -506,6 +762,12 @@ def on_send(data):
         return
     if db.is_user_banned(uid):
         return
+    now = time.time()
+    timestamps = user_msg_timestamps.setdefault(uid, [])
+    timestamps[:] = [t for t in timestamps if now - t < 1]
+    if len(timestamps) >= 6:
+        return
+    timestamps.append(now)
     conv_id  = data.get('conversation_id')
     content  = data.get('content', '').strip()
     msg_type = data.get('msg_type', 'text')   # 'text'|'image'|'audio'|'file'
@@ -535,8 +797,20 @@ def on_send(data):
         max_len = int(settings.get('max_message_length', '2000'))
         if len(content) > max_len:
             return
-    msg = db.save_message(conv_id, uid, content, msg_type=msg_type, media_url=media_url)
+
+    orig_id = data.get('original_message_id')
+    try:
+        if orig_id: orig_id = int(orig_id)
+    except:
+        orig_id = None
+
+    msg = db.save_message(conv_id, uid, content, msg_type=msg_type, media_url=media_url, original_message_id=orig_id)
     msg['sender_name'] = session.get('username')
+    if orig_id:
+        orig_msg = db.get_message_by_id(orig_id)
+        if orig_msg:
+            msg['original_content'] = orig_msg['content']
+            msg['original_sender_name'] = db.get_username(orig_msg['sender_id'])
     if filename:
         msg['filename'] = filename
     emit('new_message', msg, room=f'conv_{conv_id}')
@@ -545,13 +819,18 @@ def on_send(data):
 # ---------- Admin ----------
 
 ADMIN_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'admin_config.json')
+_admin_config_cache = {'mtime': None, 'config': None}
 
 
 def verify_admin_password(password):
     if not os.path.exists(ADMIN_CONFIG_PATH):
         return False
-    with open(ADMIN_CONFIG_PATH, 'r', encoding='utf-8') as f:
-        config = json.load(f)
+    mtime = os.path.getmtime(ADMIN_CONFIG_PATH)
+    if _admin_config_cache['config'] is None or _admin_config_cache['mtime'] != mtime:
+        with open(ADMIN_CONFIG_PATH, 'r', encoding='utf-8') as f:
+            _admin_config_cache['config'] = json.load(f)
+            _admin_config_cache['mtime'] = mtime
+    config = _admin_config_cache['config']
     ph = PasswordHasher()
     try:
         return ph.verify(config['admin_password_hash'], password)
@@ -582,6 +861,7 @@ def admin_login_page():
 
 
 @app.route('/api/admin/login', methods=['POST'])
+@limiter.limit("10 per minute")
 def admin_login():
     password = request.json.get('password', '')
     if verify_admin_password(password):
