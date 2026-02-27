@@ -10,6 +10,9 @@ from argon2.exceptions import VerifyMismatchError
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24).hex())
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Adjust as needed for your deployment
+app.config['SESSION_COOKIE_SECURE'] = False  # Set True if using HTTPS
 
 DEBUG = False  # set True for development
 
@@ -79,6 +82,8 @@ def register():
         return jsonify({'ok': False, 'msg': '用户名长度应为2-20个字符'})
     if len(password) < 4:
         return jsonify({'ok': False, 'msg': '密码至少4个字符'})
+    if username.isalnum() == False:
+        return jsonify({'ok': False, 'msg': '用户名只能包含字母和数字'})
     ok, msg = db.create_user(username, password)
     return jsonify({'ok': ok, 'msg': msg})
 
