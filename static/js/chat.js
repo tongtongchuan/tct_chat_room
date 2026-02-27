@@ -306,7 +306,11 @@ function initSocket() {
         loadConversations();
     });
 
-    socket.on('conversation_created', () => {
+    socket.on('conversation_created', (data) => {
+        // Join the new conversation room so we receive messages
+        if (data && data.conversation_id) {
+            socket.emit('join_conversation', { conversation_id: data.conversation_id });
+        }
         loadConversations();
     });
 

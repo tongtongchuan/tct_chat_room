@@ -21,7 +21,7 @@ app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24).hex())
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
+    SESSION_COOKIE_SECURE=False # Set to True if using HTTPS
 )
 
 limiter = Limiter(
@@ -181,6 +181,10 @@ def create_private():
     if other_id != session['user_id'] and not db.can_start_private_chat(session['user_id'], other_id):
         return jsonify({'ok': False, 'msg': '仅可与好友发起私聊，请先发送好友申请并通过审核'}), 403
     conv_id = db.create_private_conversation(session['user_id'], other_id)
+    # Notify the other user so their conversation list updates in real time
+    if other_id != session['user_id'] and other_id in online_users:
+        for sid in online_users[other_id]:
+            socketio.emit('conversation_created', {'conversation_id': conv_id}, room=sid)
     return jsonify({'ok': True, 'conversation_id': conv_id})
 
 
