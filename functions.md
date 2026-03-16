@@ -6,6 +6,8 @@
 |---|------|
 | 后端框架 | Flask |
 | 实时通信 | Flask-SocketIO（WebSocket） |
+| 安全防护 | Flask-Limiter (速率限制) |
+| 本地日志 | Python logging (RotatingFileHandler) |
 | 数据库 | SQLite3（WAL 模式，10s 超时） |
 | 密码哈希 | argon2id（用户密码 + 管理员密码） |
 | 生产 WSGI | gevent + gevent-websocket |
@@ -16,8 +18,8 @@
 ## 1. 🔐 用户认证（注册/登录）
 
 **流程：**
-- **注册**：`POST /api/register` → 校验用户名长度(2-20)和密码长度(≥4) → `argon2id` 哈希密码 → 写入 `users` 表（argon2 自带 salt，无需单独字段）
-- **登录**：`POST /api/login` → 从数据库取出 `password_hash` → `argon2.verify()` 验证 → 写入 Flask `session`（存 `user_id` + `username`）
+- **注册**：`POST /api/register` → 校验用户名长度(2-20)、密码长度(≥4)及用户名只能含字母数字 → `argon2id` 哈希密码 → 写入 `users` 表
+- **登录**：`POST /api/login` → 速率限制 (20/min) → `argon2.verify()` 验证 → 写入 Flask `session`
 - **封禁检查**：`before_request` 钩子中每个 `/api/` 请求都会检查 `is_banned` 字段，被封禁用户立即清除 session 并返回 403
 - **注册开关**：管理员可通过 `system_settings` 表的 `registration_enabled` 关闭注册
 
@@ -34,7 +36,7 @@
 
 | 类型 | `is_group` | `is_self_chat` | 创建方式 |
 |------|-----------|----------------|---------|
-| 私聊 | 0 | 0 | `create_private_conversation()` — 用 `BEGIN IMMEDIATE` 防竞态重复创建 |
+| 私聊 | 0 | 0 | `create_private_conversation()` — 用 `BEGIN IMMEDIATE` 防竞态；创建后 WebSocket 通知对方刷新列表 |
 | 群聊 | 1 | 0 | `create_group_conversation()` — 创建者自动获得 `admin` 角色 |
 | 备忘录 | 0 | 1 | `create_self_conversation()` — 同样用 `BEGIN IMMEDIATE` 保证唯一 |
 
@@ -43,6 +45,7 @@
 - 群管理操作（改名/加人/踢人）需 `role='admin'` 或群主（`created_by`）
 - 群主转让：`transfer_group_owner()` — 旧群主降为 member，新群主升为 admin
 - 群主不能退群，必须先转让
+- **私聊限制**：仅好友之间可发起私聊（`create_private` 检查 `can_start_private_chat`）
 
 ---
 
@@ -54,10 +57,12 @@
 ```
 
 - **连接时**（`on_connect`）：将用户 `sid` 记入 `online_users` 字典，并 `join_room` 加入所有会话房间（`conv_{id}`）
+- **会话更新**：收到 `conversation_created` 事件后，客户端自动 `join_conversation` 加入新房间并刷新列表
 - **发消息**（`on_send`）：
-  1. 校验：是否登录 → 是否被封禁 → `msg_type` 白名单 → `media_url` 所有权验证 → 是否是会话成员 → 文本长度限制
+  1. 校验：是否登录 → 是否被封禁 → `msg_type` 白名单 → `media_url` 所有权及路径验证 → 是否是会话成员 → 文本长度限制
   2. `db.save_message()` 写入数据库
   3. `emit('new_message', ..., room=f'conv_{id}')` 广播给房间内所有成员
+    4. **私聊创建通知**：创建私聊时向目标用户广播 `conversation_created`，对方前端收到后自动 `join_room` 并刷新列表
 - **断开时**（`on_disconnect`）：从 `online_users` 移除 sid
 
 **前端**：收到 `new_message` 事件后追加消息气泡并滚动到底部。
@@ -150,3 +155,17 @@
 - **初始化**：`init_db()` 使用双重检查锁（`_db_init_lock` + `_db_initialized`）保证只执行一次
 - **迁移系统**：`system_settings.db_version` 记录版本号，`_init_db_locked()` 中按版本号运行增量迁移
 - **幂等列添加**：`_safe_add_column()` 用 try/except 忽略已存在的列，保证重复启动不报错
+
+---
+
+## 10. 📝 本地日志
+
+使用 `RotatingFileHandler` 记录关键操作到 `logs/app.log`：
+- **格式**：`TIME LEVEL: MESSAGE [in FILE:LINE]`
+- **轮转**：单文件最大 1MB，保留 10 个备份
+- **记录内容**：
+  - 系统启动
+  - 用户注册/登录（成功/失败）
+  - 管理员登录/操作（删除用户、封禁用户）
+  - 群聊创建
+  - 消息撤回

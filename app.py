@@ -8,6 +8,8 @@ import json
 import uuid
 import time
 import mimetypes
+import logging
+from logging.handlers import RotatingFileHandler
 
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
@@ -23,6 +25,19 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=False # Set to True if using HTTPS
 )
+
+# ── Logging Configuration ───────────────────────────────────────────────────
+if not os.path.exists('logs'):
+    os.mkdir('logs')
+
+file_handler = RotatingFileHandler('logs/app.log', maxBytes=1024 * 1024, backupCount=10)
+file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+))
+file_handler.setLevel(logging.INFO)
+app.logger.addHandler(file_handler)
+app.logger.setLevel(logging.INFO)
+app.logger.info('ChatRoom startup')
 
 limiter = Limiter(
     get_remote_address,
@@ -129,6 +144,10 @@ def register():
     if username.isalnum() == False:
         return jsonify({'ok': False, 'msg': '用户名只能包含字母和数字'})
     ok, msg = db.create_user(username, password)
+    if ok:
+        app.logger.info(f"New user registered: {username}")
+    else:
+        app.logger.warning(f"Registration failed for {username}: {msg}")
     return jsonify({'ok': ok, 'msg': msg})
 
 
@@ -141,10 +160,13 @@ def api_login():
     user = db.verify_user(username, password)
     if user:
         if user.get('is_banned'):
+            app.logger.warning(f"Banned user attempted login: {username}")
             return jsonify({'ok': False, 'msg': '账号已被封禁，请联系管理员'})
         session['user_id'] = user['id']
         session['username'] = user['username']
+        app.logger.info(f"User logged in: {username} (ID: {user['id']})")
         return jsonify({'ok': True, 'user': {'id': user['id'], 'username': user['username']}})
+    app.logger.warning(f"Login failed for {username}")
     return jsonify({'ok': False, 'msg': '用户名或密码错误'})
 
 
@@ -208,6 +230,7 @@ def create_group():
     if not member_ids:
         return jsonify({'ok': False, 'msg': '请至少选择一个成员'})
     conv_id = db.create_group_conversation(name, session['user_id'], member_ids)
+    app.logger.info(f"Group created: {name} (ID: {conv_id}) by user {session['user_id']}")
     # Notify members
     for uid in member_ids:
         if uid in online_users:
@@ -240,6 +263,7 @@ def revoke_message(message_id):
     ok, msg_text = db.revoke_message(message_id, session['user_id'])
     if not ok:
         return jsonify({'ok': False, 'msg': msg_text}), 400
+    app.logger.info(f"Message {message_id} revoked by user {session['user_id']}")
     emit_payload = {
         'message_id': message_id,
         'conversation_id': msg['conversation_id'],
@@ -872,7 +896,9 @@ def admin_login():
     password = request.json.get('password', '')
     if verify_admin_password(password):
         session['is_admin'] = True
+        app.logger.info(f"Admin logged in from {request.remote_addr}")
         return jsonify({'ok': True})
+    app.logger.warning(f"Admin login failed from {request.remote_addr}")
     return jsonify({'ok': False, 'msg': '密码错误'})
 
 
@@ -937,6 +963,7 @@ def admin_delete_user(user_id):
     if not user:
         return jsonify({'ok': False, 'msg': '用户不存在'})
     db.delete_user(user_id)
+    app.logger.warning(f"Admin deleted user {user_id} ({user['username']})")
     return jsonify({'ok': True, 'msg': f'用户 {user["username"]} 已删除'})
 
 
@@ -949,6 +976,7 @@ def admin_ban_user(user_id):
     ban = (request.json or {}).get('ban', True)
     db.ban_user(user_id, ban)
     action = '封禁' if ban else '解封'
+    app.logger.warning(f"Admin {action} user {user_id} ({user['username']})")
     return jsonify({'ok': True, 'msg': f'用户 {user["username"]} 已{action}'})
 
 
